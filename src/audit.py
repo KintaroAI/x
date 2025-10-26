@@ -13,7 +13,7 @@ def log_audit_event(
     component: Optional[str] = None,
     user_id: Optional[str] = None,
     ip_address: Optional[str] = None,
-    metadata: Optional[str] = None,
+    extra_data: Optional[str] = None,
 ):
     """
     Log an audit event to the audit_log table.
@@ -25,7 +25,7 @@ def log_audit_event(
         component: Component name (e.g., 'api', 'worker')
         user_id: User ID if applicable
         ip_address: IP address if applicable
-        metadata: JSON string with additional metadata
+        extra_data: JSON string with additional data
     """
     with get_db() as db:
         audit_entry = AuditLog(
@@ -34,7 +34,7 @@ def log_audit_event(
             component=component,
             action=action,
             message=message,
-            metadata=metadata,
+            extra_data=extra_data,
             user_id=user_id,
             ip_address=ip_address,
             created_at=datetime.utcnow(),
@@ -50,15 +50,15 @@ def log_info(action: str, message: str, component: Optional[str] = None, **kwarg
 
 def log_warning(action: str, message: str, component: Optional[str] = None, **kwargs):
     """Convenience method to log WARNING level events."""
-    log_audit_event("WARNING", action, message, component, **kwargs)
+    log_audit_event("WARNING", action, message, component=component, **kwargs)
 
 
 def log_error(action: str, message: str, component: Optional[str] = None, **kwargs):
     """Convenience method to log ERROR level events."""
-    log_audit_event("ERROR", action, message, component, **kwargs)
+    log_audit_event("ERROR", action, message, component=component, **kwargs)
 
 
 def log_critical(action: str, message: str, component: Optional[str] = None, **kwargs):
     """Convenience method to log CRITICAL level events."""
-    log_audit_event("CRITICAL", action, message, component, **kwargs)
+    log_audit_event("CRITICAL", action, message, component=component, **kwargs)
 

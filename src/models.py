@@ -19,7 +19,7 @@ class AuditLog(Base):
     component = Column(String(100), nullable=True)  # api, worker, scheduler, etc.
     action = Column(String(100), nullable=False)  # login, post_scheduled, error, etc.
     message = Column(Text, nullable=False)
-    metadata = Column(Text, nullable=True)  # JSON string for additional data
+    extra_data = Column(Text, nullable=True)  # JSON string for additional data
     user_id = Column(String(100), nullable=True, index=True)
     ip_address = Column(String(50), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

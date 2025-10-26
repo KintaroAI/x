@@ -17,8 +17,8 @@ COPY src/ ./src/
 # Copy templates
 COPY templates/ ./templates/
 
-# Copy Alembic configuration
-COPY alembic/ ./alembic/
+# Copy migrations configuration
+COPY migrations/ ./migrations/
 COPY alembic.ini ./
 
 # Install Python dependencies

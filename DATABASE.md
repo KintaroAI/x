@@ -16,7 +16,7 @@ The `audit_log` table tracks all system events with the following fields:
 - **component**: Component that generated the event (api, worker, scheduler, etc.)
 - **action**: Type of action (login, post_scheduled, error, etc.)
 - **message**: Descriptive message
-- **metadata**: JSON string with additional context
+- **extra_data**: JSON string with additional context
 - **user_id**: User identifier (if applicable)
 - **ip_address**: Client IP address (if applicable)
 - **created_at**: Record creation timestamp
@@ -107,7 +107,7 @@ log_error(
     action="database_error",
     message="Failed to connect to database",
     component="api",
-    metadata='{"error": "Connection timeout"}'
+    extra_data='{"error": "Connection timeout"}'
 )
 
 # Log with custom metadata
@@ -119,7 +119,7 @@ log_audit_event(
     action="rate_limit_exceeded",
     message="API rate limit approaching",
     component="worker",
-    metadata=json.dumps({"limit": 100, "current": 95})
+    extra_data=json.dumps({"limit": 100, "current": 95})
 )
 ```
 

@@ -143,7 +143,7 @@ make build
 ├── templates/            # HTML templates (HTMX)
 │   ├── base.html        # Base template
 │   └── index.html       # Main page
-├── alembic/             # Database migrations
+├── migrations/           # Database migrations
 │   ├── env.py           # Alembic configuration
 │   └── versions/        # Migration files
 ├── docker-compose.yml   # Docker Compose configuration

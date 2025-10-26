@@ -27,7 +27,7 @@ def upgrade() -> None:
         sa.Column('component', sa.String(length=100), nullable=True),
         sa.Column('action', sa.String(length=100), nullable=False),
         sa.Column('message', sa.Text(), nullable=False),
-        sa.Column('metadata', sa.Text(), nullable=True),
+        sa.Column('extra_data', sa.Text(), nullable=True),
         sa.Column('user_id', sa.String(length=100), nullable=True),
         sa.Column('ip_address', sa.String(length=50), nullable=True),
         sa.Column('created_at', sa.DateTime(), nullable=False),
