@@ -14,6 +14,9 @@ COPY requirements.txt pyproject.toml README.md LICENSE ./
 # Copy source code
 COPY src/ ./src/
 
+# Copy templates
+COPY templates/ ./templates/
+
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt && \
     pip install --no-cache-dir -e .

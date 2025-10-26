@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="max-w-2xl mx-auto">
+    <h1 class="text-4xl font-bold text-gray-900 mb-8">X Scheduler</h1>
+    
+    <div class="bg-white rounded-lg shadow p-6 mb-6">
+        <h2 class="text-2xl font-semibold text-gray-800 mb-4">Hello World Example</h2>
+        
+        <button
+            hx-get="/api/hello"
+            hx-target="#response"
+            hx-swap="innerHTML"
+            class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded transition-colors"
+        >
+            Call API
+        </button>
+        
+        <div id="response" class="mt-4 p-4 bg-gray-100 rounded border border-gray-300">
+            <p class="text-gray-600">Click the button to see the API response</p>
+        </div>
+        
+        <script>
+            document.body.addEventListener('htmx:afterSwap', function(evt) {
+                // Format JSON responses nicely
+                if (evt.detail.target.id === 'response') {
+                    const target = evt.detail.target;
+                    try {
+                        const data = JSON.parse(target.innerHTML);
+                        target.innerHTML = `
+                            <pre class="bg-white p-4 rounded border border-gray-300 overflow-x-auto">
+                                <code class="text-sm">${JSON.stringify(data, null, 2)}</code>
+                            </pre>
+                        `;
+                    } catch (e) {
+                        // Not JSON, leave as is
+                    }
+                }
+            });
+        </script>
+    </div>
+
+    <div class="bg-white rounded-lg shadow p-6">
+        <h2 class="text-2xl font-semibold text-gray-800 mb-4">Status</h2>
+        <div hx-get="/health" hx-trigger="load" hx-swap="innerHTML">
+            <p class="text-gray-600">Loading...</p>
+        </div>
+    </div>
+    
+    <div class="bg-white rounded-lg shadow p-6 mt-6">
+        <h2 class="text-2xl font-semibold text-gray-800 mb-4">How it works</h2>
+        <div class="space-y-3 text-gray-700">
+            <p><strong>1. HTMX:</strong> Click "Call API" to trigger an AJAX request without writing JavaScript.</p>
+            <p><strong>2. FastAPI:</strong> The backend serves both HTML and API endpoints.</p>
+            <p><strong>3. Tailwind CSS:</strong> Styling is done with utility classes.</p>
+        </div>
+    </div>
+</div>
+{% endblock %}

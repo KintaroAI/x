@@ -35,8 +35,8 @@ This project uses Docker Compose to orchestrate multiple services:
    docker compose --profile dev up -d
    ```
 
-3. **Access the API:**
-   - API: http://localhost:8000
+3. **Access the application:**
+   - UI: http://localhost:8000
    - API Docs: http://localhost:8000/docs
 
 4. **View logs:**
@@ -125,6 +125,9 @@ make build
 │   ├── main.py          # FastAPI application
 │   ├── __init__.py
 │   └── worker.py        # APScheduler worker
+├── templates/           # HTML templates (HTMX)
+│   ├── base.html        # Base template
+│   └── index.html       # Main page
 ├── alembic/             # Database migrations
 ├── docker-compose.yml   # Docker Compose configuration
 ├── Dockerfile           # Docker image definition
