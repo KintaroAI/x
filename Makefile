@@ -28,7 +28,7 @@ up:
 	docker compose up -d
 
 down:
-	docker compose down
+	docker compose --profile dev --profile prod down
 
 logs:
 	docker compose logs -f
