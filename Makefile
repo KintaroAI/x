@@ -16,12 +16,12 @@ help:
 
 dev:
 	@echo "Starting development environment..."
-	cp env.dev.example .env 2>/dev/null || true
+	@test ! -f .env && cp env.dev.example .env || true
 	docker compose --profile dev up -d
 
 prod:
 	@echo "Starting production environment..."
-	cp env.prod.example .env 2>/dev/null || true
+	@test ! -f .env && cp env.prod.example .env || true
 	docker compose --profile prod -f docker-compose.yml -f docker-compose.prod.yml up -d
 
 up:
