@@ -55,5 +55,55 @@
             <p><strong>3. Tailwind CSS:</strong> Styling is done with utility classes.</p>
         </div>
     </div>
+
+    <div class="bg-white rounded-lg shadow p-6 mt-6">
+        <h2 class="text-2xl font-semibold text-gray-800 mb-4">Audit Log (Latest 10 Records)</h2>
+        
+        <button
+            hx-post="/api/audit-log/test"
+            hx-target="#audit-response"
+            hx-swap="innerHTML"
+            hx-trigger="click"
+            class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded transition-colors mb-4"
+        >
+            Add Test Record
+        </button>
+        
+        <div id="audit-response" class="mb-4"></div>
+        
+        <div id="audit-log-container" class="mt-4">
+            <div hx-get="/api/audit-log/html" hx-trigger="load, refresh-audit from:body" hx-swap="outerHTML">
+                <p class="text-gray-600">Loading audit log...</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.body.addEventListener('htmx:afterRequest', function(evt) {
+            // After any htmx request, check if we need to refresh audit log
+            if (evt.detail.pathInfo === '/api/audit-log/test') {
+                // Trigger refresh of audit log after creating test record
+                htmx.trigger(htmx.find('#audit-log-container'), 'refresh-audit');
+            }
+        });
+
+        // Handle the audit log response
+        document.body.addEventListener('htmx:afterSwap', function(evt) {
+            if (evt.detail.target.id === 'audit-response') {
+                // Try to format JSON response nicely
+                try {
+                    const data = JSON.parse(evt.detail.target.innerHTML);
+                    evt.detail.target.innerHTML = `
+                        <div class="bg-green-50 border border-green-300 rounded p-3">
+                            <p class="text-green-800 font-semibold">✓ Test record created!</p>
+                            <p class="text-sm text-green-700 mt-1">ID: ${data.id}, Level: ${data.level}, Message: ${data.message}</p>
+                        </div>
+                    `;
+                } catch (e) {
+                    // Not JSON, leave as is
+                }
+            }
+        });
+    </script>
 </div>
 {% endblock %}
