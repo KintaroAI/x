@@ -1,4 +1,4 @@
-.PHONY: help dev prod up down logs clean migrate init-db migrate-create shell-db
+.PHONY: help dev prod up down logs clean migrate init-db migrate-create shell-db update-db
 
 help:
 	@echo "Available commands:"
@@ -10,6 +10,7 @@ help:
 	@echo "  make build           - Build Docker images"
 	@echo "  make migrate         - Run database migrations"
 	@echo "  make init-db         - Initialize database (create tables)"
+	@echo "  make update-db       - Rebuild and apply database changes"
 	@echo "  make migrate-create  - Create a new migration"
 	@echo "  make shell-db        - Open PostgreSQL shell"
 
@@ -53,6 +54,14 @@ migrate-create:
 
 shell-db:
 	docker compose exec db psql -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-app_db}
+
+update-db:
+	@echo "Updating database with latest changes..."
+	docker compose build api
+	docker compose up -d api
+	sleep 3
+	docker compose exec -T api alembic upgrade head
+	@echo "Database updated successfully!"
 
 build:
 	docker compose build

@@ -114,6 +114,9 @@ make logs
 # Initialize database (creates tables)
 make init-db
 
+# Update database (rebuild container and apply migrations)
+make update-db
+
 # Run database migrations
 make migrate
 

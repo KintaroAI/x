@@ -50,7 +50,10 @@ After starting the database:
 # First time setup (creates tables)
 make init-db
 
-# Apply pending migrations
+# Update database (rebuilds container and applies migrations)
+make update-db
+
+# Apply pending migrations (without rebuilding)
 make migrate
 ```
 
@@ -137,7 +140,8 @@ POSTGRES_PORT=5432
 ## Makefile Commands
 
 - `make init-db` - Initialize database (create tables)
-- `make migrate` - Run pending migrations
+- `make update-db` - Rebuild container and apply database changes
+- `make migrate` - Run pending migrations (without rebuilding)
 - `make migrate-create` - Create a new migration
 - `make shell-db` - Open PostgreSQL shell
 
