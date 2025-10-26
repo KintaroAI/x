@@ -1,14 +1,17 @@
-.PHONY: help dev prod up down logs clean migrate
+.PHONY: help dev prod up down logs clean migrate init-db migrate-create shell-db
 
 help:
 	@echo "Available commands:"
-	@echo "  make dev        - Start development environment"
-	@echo "  make prod       - Start production environment"
-	@echo "  make down       - Stop all containers"
-	@echo "  make logs       - View logs"
-	@echo "  make clean      - Remove containers and volumes"
-	@echo "  make migrate    - Run database migrations"
-	@echo "  make build      - Build Docker images"
+	@echo "  make dev             - Start development environment"
+	@echo "  make prod            - Start production environment"
+	@echo "  make down            - Stop all containers"
+	@echo "  make logs            - View logs"
+	@echo "  make clean           - Remove containers and volumes"
+	@echo "  make build           - Build Docker images"
+	@echo "  make migrate         - Run database migrations"
+	@echo "  make init-db         - Initialize database (create tables)"
+	@echo "  make migrate-create  - Create a new migration"
+	@echo "  make shell-db        - Open PostgreSQL shell"
 
 dev:
 	@echo "Starting development environment..."
@@ -35,6 +38,21 @@ clean:
 
 migrate:
 	docker compose exec api alembic upgrade head
+
+init-db:
+	@echo "Initializing database..."
+	docker compose up -d db
+	sleep 5
+	docker compose exec -T api alembic upgrade head
+	@echo "Database initialized successfully!"
+
+migrate-create:
+	@echo "Creating new migration..."
+	@read -p "Enter migration message: " msg; \
+	docker compose exec api alembic revision --autogenerate -m "$$msg"
+
+shell-db:
+	docker compose exec db psql -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-app_db}
 
 build:
 	docker compose build

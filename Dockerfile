@@ -17,6 +17,10 @@ COPY src/ ./src/
 # Copy templates
 COPY templates/ ./templates/
 
+# Copy Alembic configuration
+COPY alembic/ ./alembic/
+COPY alembic.ini ./
+
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt && \
     pip install --no-cache-dir -e .

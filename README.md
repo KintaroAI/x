@@ -68,7 +68,11 @@ This project uses Docker Compose to orchestrate multiple services:
    docker compose --profile prod -f docker-compose.yml -f docker-compose.prod.yml up -d
    ```
 
-3. **Run migrations:**
+3. **Initialize database (first time setup):**
+   ```bash
+   make init-db
+   ```
+   Or run migrations manually:
    ```bash
    make migrate
    # Or manually
@@ -107,8 +111,17 @@ make down
 # View logs
 make logs
 
+# Initialize database (creates tables)
+make init-db
+
 # Run database migrations
 make migrate
+
+# Create a new migration
+make migrate-create
+
+# Access database shell
+make shell-db
 
 # Clean up (removes containers and volumes)
 make clean
@@ -123,12 +136,16 @@ make build
 .
 ├── src/                  # Application source code
 │   ├── main.py          # FastAPI application
-│   ├── __init__.py
-│   └── worker.py        # APScheduler worker
-├── templates/           # HTML templates (HTMX)
+│   ├── worker.py        # APScheduler worker
+│   ├── models.py        # Database models
+│   ├── database.py      # Database utilities
+│   └── audit.py         # Audit logging utilities
+├── templates/            # HTML templates (HTMX)
 │   ├── base.html        # Base template
 │   └── index.html       # Main page
 ├── alembic/             # Database migrations
+│   ├── env.py           # Alembic configuration
+│   └── versions/        # Migration files
 ├── docker-compose.yml   # Docker Compose configuration
 ├── Dockerfile           # Docker image definition
 ├── Makefile            # Development commands
