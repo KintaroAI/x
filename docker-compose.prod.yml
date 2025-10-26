@@ -1,6 +1,4 @@
 # Production profile overrides
-version: '3.8'
-
 services:
   api:
     environment:

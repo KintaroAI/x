@@ -1,13 +1,13 @@
 # Development profile overrides
-version: '3.8'
-
 services:
   api:
     environment:
       - ENVIRONMENT=dev
       - LOG_LEVEL=debug
+      - PYTHONPATH=/app
     ports:
       - "8000:8000"
     volumes:
       - ./src:/app/src
-    command: uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
+      - ./templates:/app/templates
+    command: uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /app/src --reload-dir /app/templates
