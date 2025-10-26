@@ -9,14 +9,14 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy dependency files
-COPY requirements.txt pyproject.toml ./
+COPY requirements.txt pyproject.toml README.md LICENSE ./
+
+# Copy source code
+COPY src/ ./src/
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt && \
     pip install --no-cache-dir -e .
-
-# Copy application code
-COPY src/ ./src/
 
 EXPOSE 8000
 
