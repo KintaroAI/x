@@ -1,0 +1,21 @@
+# Production profile overrides
+version: '3.8'
+
+services:
+  api:
+    environment:
+      - ENVIRONMENT=prod
+      - LOG_LEVEL=info
+    volumes:
+      - ./src:/app/src:ro
+    command: uvicorn src.main:app --host 0.0.0.0 --port 8000 --workers 4
+    restart: always
+
+  worker:
+    restart: always
+
+  db:
+    restart: always
+
+  redis:
+    restart: always

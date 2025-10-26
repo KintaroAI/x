@@ -1,1 +1,25 @@
-# Add your project dependencies here
+# Web framework
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+
+# Database
+sqlalchemy>=2.0.0
+alembic>=1.12.0
+psycopg2-binary>=2.9.0
+
+# HTTP client
+httpx>=0.25.0
+
+# Scheduling
+apscheduler>=3.10.0
+
+# Redis
+redis>=5.0.0
+
+# Settings
+pydantic-settings>=2.0.0
+
+# Development
+pytest>=7.4.0
+black>=23.10.0
+flake8>=6.1.0
