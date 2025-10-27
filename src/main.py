@@ -1,12 +1,15 @@
 """FastAPI application entry point."""
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from fastapi import Request
-from typing import List
 from datetime import datetime
+import os
+import base64
+import httpx
+import tweepy
 from src.models import AuditLog
 from src.database import get_db
 
@@ -178,6 +181,111 @@ async def create_test_audit_log():
             "action": audit_entry.action,
             "message": audit_entry.message,
         }
+
+
+@app.post("/api/twitter/profile")
+async def get_twitter_profile(username: str = Form(...)):
+    """Load a Twitter profile by username."""
+    try:
+        if not username:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Username is required"}
+            )
+        
+        # Get OAuth2 credentials from environment
+        client_id = os.getenv("X_CLIENT_ID")
+        client_secret = os.getenv("X_CLIENT_SECRET")
+        
+        if not client_id or not client_secret:
+            return JSONResponse(
+                status_code=500,
+                content={"error": "Twitter OAuth2 credentials not configured (X_CLIENT_ID and X_CLIENT_SECRET required)"}
+            )
+        
+        # Remove @ if present
+        username = username.lstrip('@')
+        
+        # For OAuth2 App-Only authentication, we need to obtain an access token first
+        # Encode credentials for OAuth2 App-Only flow
+        credentials = base64.b64encode(
+            f"{client_id}:{client_secret}".encode('utf-8')
+        ).decode('utf-8')
+        
+        # Request access token
+        async with httpx.AsyncClient() as client_http:
+            auth_response = await client_http.post(
+                'https://api.twitter.com/oauth2/token',
+                headers={
+                    'Authorization': f'Basic {credentials}',
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                },
+                data='grant_type=client_credentials'
+            )
+            
+            if auth_response.status_code != 200:
+                return JSONResponse(
+                    status_code=500,
+                    content={"error": f"Failed to authenticate with Twitter API: {auth_response.text}"}
+                )
+            
+            access_token = auth_response.json().get('access_token')
+        
+        if not access_token:
+            return JSONResponse(
+                status_code=500,
+                content={"error": "Failed to obtain Twitter access token"}
+            )
+        
+        # Initialize Tweepy client with access token
+        client = tweepy.Client(bearer_token=access_token)
+        
+        # Fetch user information
+        try:
+            user = client.get_user(username=username, user_fields=["profile_image_url", "description"])
+            
+            if not user.data:
+                return JSONResponse(
+                    status_code=404,
+                    content={"error": "User not found"}
+                )
+            
+            profile_data = user.data
+            
+            return {
+                "username": profile_data.username,
+                "name": profile_data.name,
+                "bio": profile_data.description or "",
+                "profile_image_url": profile_data.profile_image_url or "",
+                "profile_url": f"https://twitter.com/{profile_data.username}",
+                "verified": getattr(profile_data, 'verified', False),
+                "followers_count": getattr(profile_data, 'public_metrics', {}).get('followers_count', 0) if hasattr(profile_data, 'public_metrics') else 0,
+            }
+        except tweepy.TooManyRequests:
+            return JSONResponse(
+                status_code=429,
+                content={"error": "Rate limit exceeded. Please try again later."}
+            )
+        except tweepy.NotFound:
+            return JSONResponse(
+                status_code=404,
+                content={"error": "User not found"}
+            )
+        except tweepy.Unauthorized:
+            return JSONResponse(
+                status_code=401,
+                content={"error": "Invalid Twitter credentials"}
+            )
+        except Exception as e:
+            return JSONResponse(
+                status_code=500,
+                content={"error": f"Failed to fetch profile: {str(e)}"}
+            )
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e)}
+        )
 
 
 def main():

@@ -1,13 +1,15 @@
-.PHONY: help dev prod up down logs clean migrate init-db migrate-create shell-db update-db
+.PHONY: help dev prod up down logs logs-api clean migrate init-db migrate-create shell-db update-db build-api
 
 help:
 	@echo "Available commands:"
 	@echo "  make dev             - Start development environment"
 	@echo "  make prod            - Start production environment"
 	@echo "  make down            - Stop all containers"
-	@echo "  make logs            - View logs"
+	@echo "  make logs            - View all service logs"
+	@echo "  make logs-api        - View API logs only"
 	@echo "  make clean           - Remove containers and volumes"
 	@echo "  make build           - Build Docker images"
+	@echo "  make build-api       - Rebuild API container"
 	@echo "  make migrate         - Run database migrations"
 	@echo "  make init-db         - Initialize database (create tables)"
 	@echo "  make update-db       - Rebuild and apply database changes"
@@ -32,6 +34,9 @@ down:
 
 logs:
 	docker compose logs -f
+
+logs-api:
+	docker compose logs -f api
 
 clean:
 	docker compose down -v
@@ -65,3 +70,9 @@ update-db:
 
 build:
 	docker compose build
+
+build-api:
+	@echo "Rebuilding API container..."
+	docker compose build api
+	docker compose up -d --force-recreate api
+	@echo "API container rebuilt and restarted!"
