@@ -852,6 +852,61 @@ async def delete_post(post_id: int):
         )
 
 
+@app.post("/api/posts/{post_id}/restore")
+async def restore_post(post_id: int):
+    """Restore a deleted post by marking it as not deleted."""
+    try:
+        logger.debug(f"restore_post called with post_id: {post_id}")
+        
+        with get_db() as db:
+            post = db.query(Post).filter(Post.id == post_id).first()
+            
+            if not post:
+                logger.warning(f"Post not found: {post_id}")
+                log_error(
+                    action="post_restore_not_found",
+                    message=f"Attempted to restore non-existent post {post_id}",
+                    component="api",
+                    extra_data=json.dumps({"post_id": post_id})
+                )
+                return JSONResponse(
+                    status_code=404,
+                    content={"error": "Post not found"}
+                )
+            
+            # Restore post - mark as not deleted
+            post.deleted = False
+            post.updated_at = datetime.utcnow()
+            db.commit()
+            
+            logger.info(f"Restored post with id: {post_id}")
+            log_info(
+                action="post_restored",
+                message=f"Restored post with id {post_id}",
+                component="api",
+                extra_data=json.dumps({"post_id": post_id})
+            )
+            
+            return {
+                "id": post.id,
+                "deleted": False,
+                "message": "Post restored successfully"
+            }
+    
+    except Exception as e:
+        logger.error(f"Unexpected error in restore_post: {str(e)}", exc_info=True)
+        log_error(
+            action="post_restore_exception",
+            message=f"Exception while restoring post",
+            component="api",
+            extra_data=json.dumps({"post_id": post_id, "error": str(e), "error_type": type(e).__name__})
+        )
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e)}
+        )
+
+
 def main():
     """Main function."""
     import uvicorn
