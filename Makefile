@@ -1,4 +1,4 @@
-.PHONY: help dev prod up down logs logs-api clean migrate init-db migrate-create shell-db update-db build-api
+.PHONY: help dev prod up down logs logs-api clean migrate init-db migrate-create migrate-create-simple shell-db update-db build-api
 
 help:
 	@echo "Available commands:"
@@ -13,7 +13,8 @@ help:
 	@echo "  make migrate         - Run database migrations"
 	@echo "  make init-db         - Initialize database (create tables)"
 	@echo "  make update-db       - Rebuild and apply database changes"
-	@echo "  make migrate-create  - Create a new migration"
+	@echo "  make migrate-create  - Create a new migration (interactive)"
+	@echo "  make migrate-create-simple MSG='msg' - Create migration with message"
 	@echo "  make shell-db        - Open PostgreSQL shell"
 
 dev:
@@ -56,6 +57,16 @@ migrate-create:
 	@echo "Creating new migration..."
 	@read -p "Enter migration message: " msg; \
 	docker compose exec api alembic revision --autogenerate -m "$$msg"
+
+migrate-create-simple:
+	@if [ -z "$(MSG)" ]; then \
+		echo "Error: MSG parameter is required"; \
+		echo "Usage: make migrate-create-simple MSG='your migration message'"; \
+		echo "Example: make migrate-create-simple MSG='add user model'"; \
+		exit 1; \
+	fi; \
+	echo "Creating new migration: $(MSG)"; \
+	docker compose exec api alembic revision --autogenerate -m "$(MSG)"
 
 shell-db:
 	docker compose exec db psql -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-app_db}
