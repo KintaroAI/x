@@ -134,7 +134,29 @@ async def health_page(request: Request):
 @app.get("/create-post", response_class=HTMLResponse)
 async def create_post_page(request: Request):
     """Post creation page."""
-    return templates.TemplateResponse("create_post.html", {"request": request})
+    return templates.TemplateResponse("create_post.html", {"request": request, "post": None, "is_edit": False})
+
+
+@app.get("/edit-post/{post_id}", response_class=HTMLResponse)
+async def edit_post_page(request: Request, post_id: int):
+    """Post editing page."""
+    try:
+        with get_db() as db:
+            post = db.query(Post).filter(Post.id == post_id, Post.deleted == False).first()
+            
+            if not post:
+                # Post not found or deleted - redirect to index
+                from fastapi.responses import RedirectResponse
+                return RedirectResponse(url="/", status_code=302)
+            
+            return templates.TemplateResponse(
+                "create_post.html", 
+                {"request": request, "post": post, "is_edit": True}
+            )
+    except Exception as e:
+        logger.error(f"Error loading edit post page: {str(e)}", exc_info=True)
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url="/", status_code=302)
 
 
 @app.get("/api/health")
@@ -791,6 +813,118 @@ async def create_post(text: str = Form(...), media_refs: str = Form(None)):
             f"""
             <div class="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded-lg">
                 <h3 class="font-semibold mb-2">✗ Error Creating Post</h3>
+                <p class="text-sm">{str(e)}</p>
+            </div>
+            """
+        )
+
+
+@app.post("/api/posts/{post_id}")
+async def update_post(post_id: int, text: str = Form(...), media_refs: str = Form(None)):
+    """Update an existing post."""
+    try:
+        logger.debug(f"update_post called with post_id: {post_id}, text length: {len(text)}")
+        
+        # Validate text
+        if not text or len(text.strip()) == 0:
+            log_error(
+                action="post_update_empty",
+                message="Attempted to update post with empty text",
+                component="api",
+                extra_data=json.dumps({"post_id": post_id, "text_length": len(text) if text else 0})
+            )
+            return HTMLResponse(
+                """
+                <div class="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded-lg">
+                    <h3 class="font-semibold mb-2">✗ Error Updating Post</h3>
+                    <p class="text-sm">Post text cannot be empty</p>
+                </div>
+                """
+            )
+        
+        # Parse media_refs if provided
+        media_data = None
+        if media_refs:
+            try:
+                media_data = json.loads(media_refs)
+                if not isinstance(media_data, list):
+                    raise ValueError("media_refs must be a JSON array")
+            except json.JSONDecodeError as e:
+                log_error(
+                    action="post_update_invalid_media",
+                    message="Failed to parse media_refs JSON",
+                    component="api",
+                    extra_data=json.dumps({"post_id": post_id, "error": str(e)})
+                )
+                return HTMLResponse(
+                    """
+                    <div class="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded-lg">
+                        <h3 class="font-semibold mb-2">✗ Error Updating Post</h3>
+                        <p class="text-sm">media_refs must be a valid JSON array</p>
+                    </div>
+                    """
+                )
+        
+        with get_db() as db:
+            post = db.query(Post).filter(Post.id == post_id, Post.deleted == False).first()
+            
+            if not post:
+                log_error(
+                    action="post_update_not_found",
+                    message=f"Attempted to update non-existent post {post_id}",
+                    component="api",
+                    extra_data=json.dumps({"post_id": post_id})
+                )
+                return HTMLResponse(
+                    """
+                    <div class="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded-lg">
+                        <h3 class="font-semibold mb-2">✗ Error Updating Post</h3>
+                        <p class="text-sm">Post not found</p>
+                    </div>
+                    """
+                )
+            
+            # Update post
+            post.text = text.strip()
+            post.media_refs = json.dumps(media_data) if media_data else None
+            post.updated_at = datetime.utcnow()
+            db.commit()
+            
+            logger.info(f"Updated post with id: {post_id}")
+            log_info(
+                action="post_updated",
+                message=f"Updated post with id {post_id}",
+                component="api",
+                extra_data=json.dumps({
+                    "post_id": post_id,
+                    "text_length": len(text),
+                    "has_media": media_data is not None
+                })
+            )
+            
+            # Return success response
+            return HTMLResponse(
+                f"""
+                <div class="bg-green-50 border border-green-200 text-green-800 px-4 py-3 rounded-lg">
+                    <h3 class="font-semibold mb-2">✓ Post Updated Successfully</h3>
+                    <p class="text-sm">Post ID: {post.id}</p>
+                    <p class="text-sm">Updated at: {post.updated_at.strftime('%Y-%m-%d %H:%M:%S')}</p>
+                </div>
+                """
+            )
+    
+    except Exception as e:
+        logger.error(f"Unexpected error in update_post: {str(e)}", exc_info=True)
+        log_error(
+            action="post_update_exception",
+            message=f"Exception while updating post",
+            component="api",
+            extra_data=json.dumps({"post_id": post_id, "error": str(e), "error_type": type(e).__name__})
+        )
+        return HTMLResponse(
+            f"""
+            <div class="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded-lg">
+                <h3 class="font-semibold mb-2">✗ Error Updating Post</h3>
                 <p class="text-sm">{str(e)}</p>
             </div>
             """
