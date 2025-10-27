@@ -359,7 +359,22 @@ async def get_or_fetch_profile(username: str, client_id: str, client_secret: str
                 component="twitter_api",
                 extra_data=json.dumps({"username": username, "fetched_at": cached_profile.fetched_at.isoformat(), "expires_at": cached_profile.expires_at.isoformat()})
             )
-            return cached_profile.raw
+            # Return cached data - convert full user object to backward-compatible format
+            cached_user = cached_profile.raw
+            result = {
+                "username": cached_user.get("username"),
+                "name": cached_user.get("name"),
+                "bio": cached_user.get("description") or cached_user.get("bio") or "",
+                "profile_image_url": cached_user.get("profile_image_url") or "",
+                "profile_url": cached_user.get("profile_url") or f"https://x.com/{cached_user.get('username')}",
+                "verified": cached_user.get("verified", False),
+                "followers_count": 0,
+            }
+            # Extract followers_count from public_metrics if available
+            public_metrics = cached_user.get("public_metrics")
+            if public_metrics and isinstance(public_metrics, dict):
+                result["followers_count"] = public_metrics.get("followers_count", 0)
+            return result
         
         # Cache expired or doesn't exist, fetch from API
         logger.info(f"Cached profile expired or not found for {username}, fetching from API")
@@ -382,8 +397,11 @@ async def get_or_fetch_profile(username: str, client_id: str, client_secret: str
     access_token = await get_or_refresh_token("twitter", client_id, client_secret)
     client = tweepy.Client(bearer_token=access_token)
     
-    # Fetch user information
-    user = client.get_user(username=username, user_fields=["profile_image_url", "description"])
+    # Fetch user information with all available fields
+    user = client.get_user(
+        username=username,
+        user_fields=["profile_image_url", "description", "public_metrics", "verified", "location", "url", "entities"]
+    )
     
     if not user.data:
         error_message = f"User not found: {username}"
@@ -398,24 +416,33 @@ async def get_or_fetch_profile(username: str, client_id: str, client_secret: str
     
     profile_data = user.data
     
-    # Safely get public_metrics
-    public_metrics = getattr(profile_data, 'public_metrics', None)
-    followers_count = 0
-    if public_metrics and isinstance(public_metrics, dict):
-        followers_count = public_metrics.get('followers_count', 0)
+    # Store the full user object as a dictionary
+    # Convert the tweepy user object to a dict (Tweepy v4+ uses Pydantic models)
+    full_user_dict = profile_data.model_dump(mode='json')
     
-    # Build result
+    # Build a result dict with fields for backward compatibility with the frontend
+    # The full user object will be stored in the cache
     result = {
         "username": profile_data.username,
         "name": profile_data.name,
-        "bio": profile_data.description or "",
+        "bio": profile_data.description or "",  # Frontend expects "bio" for "description"
         "profile_image_url": profile_data.profile_image_url or "",
         "profile_url": f"https://x.com/{profile_data.username}",
         "verified": getattr(profile_data, 'verified', False),
-        "followers_count": followers_count,
+        "followers_count": 0,
     }
     
+    # Extract followers_count from public_metrics if available
+    public_metrics = getattr(profile_data, 'public_metrics', None)
+    if public_metrics and isinstance(public_metrics, dict):
+        result["followers_count"] = public_metrics.get('followers_count', 0)
+    
     logger.info(f"Fetched profile from API for {username}")
+    
+    # IMPORTANT: Store the FULL user object in the cache's raw field
+    # Replace result with full_user_dict for database storage
+    cache_data = full_user_dict
+    cache_data["profile_url"] = f"https://x.com/{profile_data.username}"  # Add computed field
     
     # Cache the result
     fetched_at = datetime.utcnow()
@@ -428,16 +455,16 @@ async def get_or_fetch_profile(username: str, client_id: str, client_secret: str
         ).first()
         
         if existing_cache:
-            # Update existing cache
-            existing_cache.raw = result
+            # Update existing cache with FULL user object
+            existing_cache.raw = cache_data
             existing_cache.fetched_at = fetched_at
             existing_cache.expires_at = expires_at
             existing_cache.updated_at = datetime.utcnow()
         else:
-            # Create new cache entry
+            # Create new cache entry with FULL user object
             new_cache = ProfileCache(
                 username=username,
-                raw=result,
+                raw=cache_data,  # Store the full user object
                 fetched_at=fetched_at,
                 expires_at=expires_at,
                 created_at=datetime.utcnow(),
