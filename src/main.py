@@ -53,6 +53,12 @@ async def edit_post_page(request: Request, post_id: int):
     return await routes.edit_post_page(request, post_id)
 
 
+@app.get("/view-post/{post_id}", response_class=HTMLResponse)
+async def view_post_page(request: Request, post_id: int):
+    """Post view page showing post details, jobs, and published posts."""
+    return await routes.view_post_page(request, post_id)
+
+
 # Health Check Endpoints
 @app.get("/api/health")
 async def health():
@@ -133,6 +139,12 @@ async def restore_post(post_id: int):
 async def instant_publish(post_id: int):
     """Create an instant publish job for a post."""
     return await posts.instant_publish(post_id)
+
+
+@app.get("/api/posts/{post_id}")
+async def get_post(post_id: int):
+    """Get a single post with all related data."""
+    return await posts.get_post(post_id)
 
 
 def main():

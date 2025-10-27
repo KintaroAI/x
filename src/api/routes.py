@@ -53,6 +53,45 @@ async def edit_post_page(request: Request, post_id: int):
         return RedirectResponse(url="/", status_code=302)
 
 
+async def view_post_page(request: Request, post_id: int):
+    """Post view page showing post details, jobs, and published posts."""
+    try:
+        from src.models import Post, Schedule, PublishJob, PublishedPost
+        from src.database import get_db
+        
+        with get_db() as db:
+            post = db.query(Post).filter(Post.id == post_id).first()
+            
+            if not post:
+                # Post not found - redirect to index
+                return RedirectResponse(url="/", status_code=302)
+            
+            # Get schedules for this post
+            schedules = db.query(Schedule).filter(Schedule.post_id == post_id).all()
+            
+            # Get all publish jobs for these schedules
+            schedule_ids = [s.id for s in schedules]
+            jobs = []
+            if schedule_ids:
+                jobs = db.query(PublishJob).filter(PublishJob.schedule_id.in_(schedule_ids)).order_by(PublishJob.planned_at.desc()).all()
+            
+            # Get all published posts
+            published_posts = db.query(PublishedPost).filter(PublishedPost.post_id == post_id).order_by(PublishedPost.published_at.desc()).all()
+            
+            return templates.TemplateResponse(
+                "view_post.html",
+                {
+                    "request": request,
+                    "post": post,
+                    "jobs": jobs,
+                    "published_posts": published_posts
+                }
+            )
+    except Exception as e:
+        logger.error(f"Error loading view post page: {str(e)}", exc_info=True)
+        return RedirectResponse(url="/", status_code=302)
+
+
 async def health():
     """Health check endpoint (JSON)."""
     return {"status": "healthy"}

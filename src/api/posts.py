@@ -493,3 +493,95 @@ async def instant_publish(post_id: int):
             content={"error": str(e)}
         )
 
+
+async def get_post(post_id: int):
+    """Get a single post with all related data (schedules, jobs, published posts)."""
+    try:
+        logger.debug(f"get_post called with post_id: {post_id}")
+        
+        from src.models import Schedule, PublishJob, PublishedPost
+        
+        with get_db() as db:
+            post = db.query(Post).filter(Post.id == post_id).first()
+            
+            if not post:
+                logger.warning(f"Post not found: {post_id}")
+                return JSONResponse(
+                    status_code=404,
+                    content={"error": "Post not found"}
+                )
+            
+            # Get schedules for this post
+            schedules = db.query(Schedule).filter(Schedule.post_id == post_id).all()
+            
+            # Get all publish jobs for these schedules
+            schedule_ids = [s.id for s in schedules]
+            jobs = []
+            if schedule_ids:
+                jobs = db.query(PublishJob).filter(PublishJob.schedule_id.in_(schedule_ids)).order_by(PublishJob.planned_at.desc()).all()
+            
+            # Get all published posts
+            published_posts = db.query(PublishedPost).filter(PublishedPost.post_id == post_id).order_by(PublishedPost.published_at.desc()).all()
+            
+            # Build result
+            result = {
+                "id": post.id,
+                "text": post.text,
+                "media_refs": post.media_refs,
+                "deleted": post.deleted,
+                "created_at": post.created_at.isoformat(),
+                "updated_at": post.updated_at.isoformat(),
+                "schedules": [
+                    {
+                        "id": s.id,
+                        "kind": s.kind,
+                        "schedule_spec": s.schedule_spec,
+                        "timezone": s.timezone,
+                        "next_run_at": s.next_run_at.isoformat() if s.next_run_at else None,
+                        "enabled": s.enabled,
+                        "created_at": s.created_at.isoformat(),
+                        "updated_at": s.updated_at.isoformat(),
+                    }
+                    for s in schedules
+                ],
+                "jobs": [
+                    {
+                        "id": j.id,
+                        "schedule_id": j.schedule_id,
+                        "planned_at": j.planned_at.isoformat(),
+                        "started_at": j.started_at.isoformat() if j.started_at else None,
+                        "finished_at": j.finished_at.isoformat() if j.finished_at else None,
+                        "status": j.status,
+                        "error": j.error,
+                        "created_at": j.created_at.isoformat(),
+                        "updated_at": j.updated_at.isoformat(),
+                    }
+                    for j in jobs
+                ],
+                "published_posts": [
+                    {
+                        "id": pp.id,
+                        "x_post_id": pp.x_post_id,
+                        "published_at": pp.published_at.isoformat(),
+                        "url": pp.url,
+                    }
+                    for pp in published_posts
+                ]
+            }
+            
+            logger.info(f"Retrieved post {post_id} with {len(schedules)} schedules, {len(jobs)} jobs, {len(published_posts)} published posts")
+            return result
+    
+    except Exception as e:
+        logger.error(f"Unexpected error in get_post: {str(e)}", exc_info=True)
+        log_error(
+            action="post_get_exception",
+            message=f"Exception while getting post",
+            component="api",
+            extra_data=json.dumps({"post_id": post_id, "error": str(e), "error_type": type(e).__name__})
+        )
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e)}
+        )
+
