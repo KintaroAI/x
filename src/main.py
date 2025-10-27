@@ -665,12 +665,12 @@ async def get_twitter_profile(username: str = Form(...)):
 
 @app.get("/api/posts")
 async def get_posts():
-    """Get all posts."""
+    """Get all non-deleted posts."""
     try:
         logger.debug("get_posts called")
         
         with get_db() as db:
-            posts = db.query(Post).order_by(Post.created_at.desc()).all()
+            posts = db.query(Post).filter(Post.deleted == False).order_by(Post.created_at.desc()).all()
             
             result = [
                 {
@@ -788,6 +788,61 @@ async def create_post(text: str = Form(...), media_refs: str = Form(None)):
                 <p class="text-sm">{str(e)}</p>
             </div>
             """
+        )
+
+
+@app.delete("/api/posts/{post_id}")
+async def delete_post(post_id: int):
+    """Soft delete a post by marking it as deleted."""
+    try:
+        logger.debug(f"delete_post called with post_id: {post_id}")
+        
+        with get_db() as db:
+            post = db.query(Post).filter(Post.id == post_id).first()
+            
+            if not post:
+                logger.warning(f"Post not found: {post_id}")
+                log_error(
+                    action="post_delete_not_found",
+                    message=f"Attempted to delete non-existent post {post_id}",
+                    component="api",
+                    extra_data=json.dumps({"post_id": post_id})
+                )
+                return JSONResponse(
+                    status_code=404,
+                    content={"error": "Post not found"}
+                )
+            
+            # Soft delete - just mark as deleted
+            post.deleted = True
+            post.updated_at = datetime.utcnow()
+            db.commit()
+            
+            logger.info(f"Soft deleted post with id: {post_id}")
+            log_info(
+                action="post_deleted",
+                message=f"Soft deleted post with id {post_id}",
+                component="api",
+                extra_data=json.dumps({"post_id": post_id})
+            )
+            
+            return {
+                "id": post.id,
+                "deleted": True,
+                "message": "Post deleted successfully"
+            }
+    
+    except Exception as e:
+        logger.error(f"Unexpected error in delete_post: {str(e)}", exc_info=True)
+        log_error(
+            action="post_delete_exception",
+            message=f"Exception while deleting post",
+            component="api",
+            extra_data=json.dumps({"post_id": post_id, "error": str(e), "error_type": type(e).__name__})
+        )
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e)}
         )
 
 

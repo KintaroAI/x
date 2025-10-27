@@ -1,6 +1,6 @@
-"""
+"""add core posting models
 
-Revision ID: 76053dfb0d14
+Revision ID: 003
 Revises: 002
 Create Date: 2025-10-27 02:07:11.989810
 

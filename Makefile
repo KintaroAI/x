@@ -68,9 +68,7 @@ migrate-create-simple:
 	echo "Creating new migration: $(MSG)"; \
 	docker compose exec -T api alembic revision --autogenerate -m "$(MSG)"; \
 	echo "Copying all migration files back to host..."; \
-	docker compose exec -T api sh -c 'find /app/migrations/versions -name "*.py" -exec basename {} \;' | while read file; do \
-		docker compose exec -T api cat /app/migrations/versions/$$file > migrations/versions/$$file; \
-	done; \
+	docker compose cp api:/app/migrations/versions ./migrations/; \
 	echo "Migration files synced to local filesystem."
 
 shell-db:
@@ -78,9 +76,9 @@ shell-db:
 
 update-db:
 	@echo "Updating database with latest changes..."
-	docker compose build api
-	docker compose up -d api
-	sleep 3
+	#docker compose build api
+	#docker compose up -d api
+	#sleep 3
 	docker compose exec -T api alembic upgrade head
 	@echo "Database updated successfully!"
 

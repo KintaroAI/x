@@ -73,6 +73,7 @@ class Post(Base):
     id = Column(Integer, primary_key=True, index=True)
     text = Column(Text, nullable=False)  # Post text content
     media_refs = Column(Text, nullable=True)  # JSON array of media URLs or IDs
+    deleted = Column(Boolean, default=False, nullable=False)  # Soft delete flag
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
