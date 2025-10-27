@@ -3,6 +3,7 @@
 from datetime import datetime
 from typing import Optional
 from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean, ForeignKey
+from sqlalchemy.dialects.postgresql import JSON
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 
@@ -171,4 +172,21 @@ class MetricsSnapshot(Base):
 
     def __repr__(self):
         return f"<MetricsSnapshot(id={self.id}, x_post_id={self.x_post_id}, impressions={self.impressions})>"
+
+
+class ProfileCache(Base):
+    """Model for caching Twitter/X profile data with expiration."""
+
+    __tablename__ = "profile_cache"
+
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String(100), nullable=False, unique=True, index=True)  # Twitter username
+    raw = Column(JSON, nullable=False)  # Full API response as JSON
+    fetched_at = Column(DateTime, nullable=False, index=True)  # When the data was fetched
+    expires_at = Column(DateTime, nullable=False, index=True)  # When the cached data expires
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    def __repr__(self):
+        return f"<ProfileCache(id={self.id}, username={self.username}, expires_at={self.expires_at})>"
 

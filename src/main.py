@@ -12,7 +12,7 @@ import httpx
 import tweepy
 import logging
 import json
-from src.models import AuditLog, TokenManagement
+from src.models import AuditLog, TokenManagement, ProfileCache
 from src.database import get_db
 from src.audit import log_info, log_error, log_warning
 
@@ -321,9 +321,146 @@ async def get_or_refresh_token(service_name: str, client_id: str, client_secret:
             raise
 
 
+async def get_or_fetch_profile(username: str, client_id: str, client_secret: str) -> dict:
+    """
+    Get or fetch Twitter profile data with caching.
+    
+    First checks the database for cached profile data. If found and not expired,
+    returns cached data. Otherwise, fetches from API and caches the result.
+    
+    Args:
+        username: Twitter username (without @)
+        client_id: Twitter OAuth2 client ID
+        client_secret: Twitter OAuth2 client secret
+        
+    Returns:
+        Dictionary containing profile data (from cache or API)
+    """
+    from datetime import timedelta
+    import json
+    
+    # Remove @ if present
+    username = username.lstrip('@')
+    
+    logger.debug(f"get_or_fetch_profile called for username: {username}")
+    
+    # Check cache first
+    with get_db() as db:
+        cached_profile = db.query(ProfileCache).filter(
+            ProfileCache.username == username
+        ).first()
+        
+        # Check if cached data exists and is still valid
+        if cached_profile and cached_profile.expires_at > datetime.utcnow():
+            logger.info(f"Using cached profile for {username} (expires at {cached_profile.expires_at})")
+            log_info(
+                action="profile_cache_hit",
+                message=f"Retrieved cached profile for {username}",
+                component="twitter_api",
+                extra_data=json.dumps({"username": username, "fetched_at": cached_profile.fetched_at.isoformat(), "expires_at": cached_profile.expires_at.isoformat()})
+            )
+            return cached_profile.raw
+        
+        # Cache expired or doesn't exist, fetch from API
+        logger.info(f"Cached profile expired or not found for {username}, fetching from API")
+        if cached_profile:
+            log_info(
+                action="profile_cache_expired",
+                message=f"Cached profile expired for {username}",
+                component="twitter_api",
+                extra_data=json.dumps({"username": username, "expires_at": cached_profile.expires_at.isoformat()})
+            )
+        else:
+            log_info(
+                action="profile_cache_miss",
+                message=f"No cached profile found for {username}",
+                component="twitter_api",
+                extra_data=json.dumps({"username": username})
+            )
+    
+    # Fetch from Twitter API
+    access_token = await get_or_refresh_token("twitter", client_id, client_secret)
+    client = tweepy.Client(bearer_token=access_token)
+    
+    # Fetch user information
+    user = client.get_user(username=username, user_fields=["profile_image_url", "description"])
+    
+    if not user.data:
+        error_message = f"User not found: {username}"
+        logger.warning(error_message)
+        log_error(
+            action="profile_fetch_not_found",
+            message=error_message,
+            component="twitter_api",
+            extra_data=json.dumps({"username": username})
+        )
+        raise ValueError(error_message)
+    
+    profile_data = user.data
+    
+    # Safely get public_metrics
+    public_metrics = getattr(profile_data, 'public_metrics', None)
+    followers_count = 0
+    if public_metrics and isinstance(public_metrics, dict):
+        followers_count = public_metrics.get('followers_count', 0)
+    
+    # Build result
+    result = {
+        "username": profile_data.username,
+        "name": profile_data.name,
+        "bio": profile_data.description or "",
+        "profile_image_url": profile_data.profile_image_url or "",
+        "profile_url": f"https://x.com/{profile_data.username}",
+        "verified": getattr(profile_data, 'verified', False),
+        "followers_count": followers_count,
+    }
+    
+    logger.info(f"Fetched profile from API for {username}")
+    
+    # Cache the result
+    fetched_at = datetime.utcnow()
+    expires_at = fetched_at + timedelta(days=1)  # 1 day expiration
+    
+    with get_db() as db:
+        # Check if we need to update existing or create new
+        existing_cache = db.query(ProfileCache).filter(
+            ProfileCache.username == username
+        ).first()
+        
+        if existing_cache:
+            # Update existing cache
+            existing_cache.raw = result
+            existing_cache.fetched_at = fetched_at
+            existing_cache.expires_at = expires_at
+            existing_cache.updated_at = datetime.utcnow()
+        else:
+            # Create new cache entry
+            new_cache = ProfileCache(
+                username=username,
+                raw=result,
+                fetched_at=fetched_at,
+                expires_at=expires_at,
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow()
+            )
+            db.add(new_cache)
+        
+        db.commit()
+        logger.info(f"Cached profile for {username} (expires at {expires_at})")
+        
+        log_info(
+            action="profile_fetched_and_cached",
+            message=f"Fetched and cached profile for {username}",
+            component="twitter_api",
+            extra_data=json.dumps({"username": username, "expires_at": expires_at.isoformat()})
+        )
+    
+    return result
+
+
 @app.post("/api/twitter/profile")
 async def get_twitter_profile(username: str = Form(...)):
-    """Load a Twitter profile by username."""
+    """Load a Twitter profile by username with caching."""
     logger.debug(f"get_twitter_profile called with username: {username}")
     
     try:
@@ -357,137 +494,25 @@ async def get_twitter_profile(username: str = Form(...)):
                 content={"error": "Twitter OAuth2 credentials not configured (X_CLIENT_ID and X_CLIENT_SECRET required)"}
             )
         
-        logger.debug(f"Twitter OAuth2 credentials configured (client_id exists: {bool(client_id)})")
+        # Use the caching function
+        result = await get_or_fetch_profile(username, client_id, client_secret)
         
-        # Remove @ if present
-        username_original = username
-        username = username.lstrip('@')
-        if username != username_original:
-            logger.debug(f"Removed @ from username: {username_original} -> {username}")
+        logger.debug(f"Returning profile data for user: {username}")
+        return result
         
-        log_info(
-            action="profile_fetch_initiated",
-            message=f"Initiating profile fetch for username: {username}",
+    except ValueError as e:
+        # User not found
+        logger.warning(f"User not found: {str(e)}")
+        log_error(
+            action="profile_fetch_not_found",
+            message=str(e),
             component="twitter_api",
-            extra_data=json.dumps({"username": username, "original_username": username_original})
+            extra_data=json.dumps({"username": username})
         )
-        
-        # Get or refresh access token (will reuse if it exists and is valid)
-        try:
-            logger.debug("Retrieving or refreshing Twitter access token")
-            access_token = await get_or_refresh_token("twitter", client_id, client_secret)
-            logger.debug("Successfully obtained access token")
-        except Exception as e:
-            logger.error(f"Failed to get/refresh Twitter access token: {str(e)}", exc_info=True)
-            log_error(
-                action="profile_fetch_token_error",
-                message=f"Failed to get/refresh Twitter access token for {username}",
-                component="twitter_api",
-                extra_data=json.dumps({"username": username, "error": str(e)})
-            )
-            return JSONResponse(
-                status_code=500,
-                content={"error": str(e)}
-            )
-        
-        # Initialize Tweepy client with access token
-        logger.debug(f"Initializing Tweepy client for username: {username}")
-        client = tweepy.Client(bearer_token=access_token)
-        
-        # Fetch user information
-        try:
-            logger.debug(f"Fetching user profile for: {username}")
-            user = client.get_user(username=username, user_fields=["profile_image_url", "description"])
-            
-            if not user.data:
-                logger.warning(f"User not found: {username}")
-                log_warning(
-                    action="profile_fetch_not_found",
-                    message=f"User not found: {username}",
-                    component="twitter_api",
-                    extra_data=json.dumps({"username": username})
-                )
-                return JSONResponse(
-                    status_code=404,
-                    content={"error": "User not found"}
-                )
-            
-            profile_data = user.data
-            logger.info(f"Successfully fetched profile for user: {username} (name: {profile_data.name})")
-            
-            # Safely get public_metrics
-            public_metrics = getattr(profile_data, 'public_metrics', None)
-            followers_count = 0
-            if public_metrics and isinstance(public_metrics, dict):
-                followers_count = public_metrics.get('followers_count', 0)
-            
-            result = {
-                "username": profile_data.username,
-                "name": profile_data.name,
-                "bio": profile_data.description or "",
-                "profile_image_url": profile_data.profile_image_url or "",
-                "profile_url": f"https://x.com/{profile_data.username}",
-                "verified": getattr(profile_data, 'verified', False),
-                "followers_count": followers_count,
-            }
-            
-            log_info(
-                action="profile_fetch_success",
-                message=f"Successfully fetched profile for {username}",
-                component="twitter_api",
-                extra_data=json.dumps({"username": username, "name": profile_data.name, "verified": result["verified"]})
-            )
-            
-            logger.debug(f"Returning profile data for user: {username}")
-            return result
-        except tweepy.TooManyRequests as e:
-            logger.error(f"Rate limit exceeded while fetching profile for {username}: {str(e)}")
-            log_error(
-                action="profile_fetch_rate_limit",
-                message=f"Rate limit exceeded while fetching profile for {username}",
-                component="twitter_api",
-                extra_data=json.dumps({"username": username, "error": str(e)})
-            )
-            return JSONResponse(
-                status_code=429,
-                content={"error": "Rate limit exceeded. Please try again later."}
-            )
-        except tweepy.NotFound as e:
-            logger.warning(f"User not found: {username} - {str(e)}")
-            log_error(
-                action="profile_fetch_not_found",
-                message=f"User not found: {username}",
-                component="twitter_api",
-                extra_data=json.dumps({"username": username, "error": str(e)})
-            )
-            return JSONResponse(
-                status_code=404,
-                content={"error": "User not found"}
-            )
-        except tweepy.Unauthorized as e:
-            logger.error(f"Unauthorized access while fetching profile for {username}: {str(e)}")
-            log_error(
-                action="profile_fetch_unauthorized",
-                message=f"Unauthorized access while fetching profile for {username}",
-                component="twitter_api",
-                extra_data=json.dumps({"username": username, "error": str(e)})
-            )
-            return JSONResponse(
-                status_code=401,
-                content={"error": "Invalid Twitter credentials"}
-            )
-        except Exception as e:
-            logger.error(f"Failed to fetch profile for {username}: {str(e)}", exc_info=True)
-            log_error(
-                action="profile_fetch_failed",
-                message=f"Failed to fetch profile for {username}",
-                component="twitter_api",
-                extra_data=json.dumps({"username": username, "error": str(e), "error_type": type(e).__name__})
-            )
-            return JSONResponse(
-                status_code=500,
-                content={"error": f"Failed to fetch profile: {str(e)}"}
-            )
+        return JSONResponse(
+            status_code=404,
+            content={"error": str(e)}
+        )
     except Exception as e:
         logger.error(f"Unexpected error in get_twitter_profile: {str(e)}", exc_info=True)
         log_error(

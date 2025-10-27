@@ -66,7 +66,12 @@ migrate-create-simple:
 		exit 1; \
 	fi; \
 	echo "Creating new migration: $(MSG)"; \
-	docker compose exec api alembic revision --autogenerate -m "$(MSG)"
+	docker compose exec -T api alembic revision --autogenerate -m "$(MSG)"; \
+	echo "Copying all migration files back to host..."; \
+	docker compose exec -T api sh -c 'find /app/migrations/versions -name "*.py" -exec basename {} \;' | while read file; do \
+		docker compose exec -T api cat /app/migrations/versions/$$file > migrations/versions/$$file; \
+	done; \
+	echo "Migration files synced to local filesystem."
 
 shell-db:
 	docker compose exec db psql -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-app_db}
