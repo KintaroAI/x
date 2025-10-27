@@ -19,6 +19,81 @@ from src.audit import log_info, log_error, log_warning
 # Configure logging
 logger = logging.getLogger(__name__)
 
+
+def _extract_urls_from_entities(entities: dict | None) -> dict:
+    """
+    Flatten the common URL shapes in Twitter/X entities:
+    {
+      "url": {"urls": [{"expanded_url": "...", "display_url": "...", "url": "..."}]},
+      "description": {"urls": [...]}
+    }
+    Returns a dict with safe lists of expanded/display/original URLs.
+    """
+    if not entities:
+        return {"profile_urls": [], "description_urls": []}
+
+    def pull(url_block):
+        out = []
+        if isinstance(url_block, dict):
+            for u in url_block.get("urls", []) or []:
+                out.append({
+                    "expanded": u.get("expanded_url"),
+                    "display": u.get("display_url"),
+                    "short": u.get("url"),
+                    "start": u.get("start"),
+                    "end": u.get("end"),
+                })
+        return out
+
+    return {
+        "profile_urls": pull(entities.get("url")),
+        "description_urls": pull(entities.get("description")),
+    }
+
+
+def serialize_user_to_dict(user_response) -> dict:
+    """
+    Accepts Tweepy Response from client.get_user(...)
+    Returns a dict with only JSON-serializable fields.
+    """
+    if not user_response or not user_response.data:
+        raise ValueError("No user data in response")
+
+    u = user_response.data  # tweepy.User
+
+    # Some fields may be absent depending on request fields and account privacy/tier.
+    public_metrics = getattr(u, "public_metrics", None) or {}
+    entities = getattr(u, "entities", None)
+    urls_info = _extract_urls_from_entities(entities)
+
+    # Note: u.url is the profile URL provided by the user (if any), not the canonical X profile link.
+    # You can always build the canonical profile link as https://x.com/{username}
+    profile_link = f"https://x.com/{getattr(u, 'username', '')}" if getattr(u, "username", None) else None
+
+    payload = {
+        "id": getattr(u, "id", None),
+        "name": getattr(u, "name", None),
+        "username": getattr(u, "username", None),
+        "profile_link": profile_link,
+        "description": getattr(u, "description", None),
+        "location": getattr(u, "location", None),
+        "verified": getattr(u, "verified", None),
+        "profile_image_url": getattr(u, "profile_image_url", None),
+        "url": getattr(u, "url", None),  # user-specified profile URL field
+        "public_metrics": {
+            "followers_count": public_metrics.get("followers_count"),
+            "following_count": public_metrics.get("following_count"),
+            "tweet_count": public_metrics.get("tweet_count"),
+            "listed_count": public_metrics.get("listed_count"),
+        },
+        # Keep raw entities for completeness and add flattened URLs.
+        "entities": entities or {},
+        "entities_flat": urls_info,
+    }
+
+    return payload
+
+
 app = FastAPI(
     title="X Scheduler",
     description="Scheduled posting and metrics tracking for X (Twitter)",
@@ -427,11 +502,8 @@ async def get_or_fetch_profile(username: str, client_id: str, client_secret: str
         )
         raise ValueError(error_message)
     
-    profile_data = user.data
-    
-    # Store the full user object as a dictionary
-    # Convert the tweepy user object to a dict (Tweepy v4+ uses Pydantic models)
-    cache_data = profile_data.model_dump(mode='json')
+    # Convert the tweepy user object to a dict using our serializer
+    cache_data = serialize_user_to_dict(user)
     
     # Convert to backward-compatible format for API response
     result = format_user_object(cache_data)
