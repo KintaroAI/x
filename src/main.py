@@ -274,11 +274,16 @@ def format_user_object(raw_user: dict) -> dict:
     Returns:
         Dictionary with fields expected by the frontend
     """
-    # Extract followers_count from public_metrics if available
-    followers_count = 0
+    # Extract metrics from public_metrics if available
     public_metrics = raw_user.get("public_metrics")
+    followers_count = 0
+    following_count = 0
+    tweet_count = 0
+    
     if public_metrics and isinstance(public_metrics, dict):
         followers_count = public_metrics.get("followers_count", 0)
+        following_count = public_metrics.get("following_count", 0)
+        tweet_count = public_metrics.get("tweet_count", 0)
     
     return {
         "username": raw_user.get("username"),
@@ -287,7 +292,10 @@ def format_user_object(raw_user: dict) -> dict:
         "profile_image_url": raw_user.get("profile_image_url") or "",
         "profile_url": f"https://x.com/{raw_user.get('username')}",
         "verified": raw_user.get("verified", False),
+        "location": raw_user.get("location"),
         "followers_count": followers_count,
+        "following_count": following_count,
+        "tweet_count": tweet_count,
     }
 
 
