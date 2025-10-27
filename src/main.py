@@ -129,6 +129,12 @@ async def restore_post(post_id: int):
     return await posts.restore_post(post_id)
 
 
+@app.post("/api/posts/{post_id}/instant-publish")
+async def instant_publish(post_id: int):
+    """Create an instant publish job for a post."""
+    return await posts.instant_publish(post_id)
+
+
 def main():
     """Main function."""
     import uvicorn

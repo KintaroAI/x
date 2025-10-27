@@ -2,7 +2,7 @@
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from fastapi import Form
 from fastapi.responses import HTMLResponse, JSONResponse
 
@@ -355,6 +355,113 @@ async def restore_post(post_id: int):
         log_error(
             action="post_restore_exception",
             message=f"Exception while restoring post",
+            component="api",
+            extra_data=json.dumps({"post_id": post_id, "error": str(e), "error_type": type(e).__name__})
+        )
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e)}
+        )
+
+
+async def instant_publish(post_id: int):
+    """Create an instant publish job for a post."""
+    try:
+        logger.debug(f"instant_publish called with post_id: {post_id}")
+        
+        from src.models import Schedule, PublishJob
+        
+        with get_db() as db:
+            # Get the post
+            post = db.query(Post).filter(Post.id == post_id, Post.deleted == False).first()
+            
+            if not post:
+                logger.warning(f"Post not found: {post_id}")
+                log_error(
+                    action="instant_publish_post_not_found",
+                    message=f"Attempted to publish non-existent post {post_id}",
+                    component="api",
+                    extra_data=json.dumps({"post_id": post_id})
+                )
+                return JSONResponse(
+                    status_code=404,
+                    content={"error": "Post not found"}
+                )
+            
+            # Get or create a schedule for this post
+            schedule = db.query(Schedule).filter(Schedule.post_id == post_id).first()
+            
+            if not schedule:
+                # Create an instant schedule
+                schedule = Schedule(
+                    post_id=post_id,
+                    kind="one_shot",
+                    schedule_spec=datetime.utcnow().isoformat(),
+                    timezone="UTC",
+                    next_run_at=datetime.utcnow(),
+                    enabled=True
+                )
+                db.add(schedule)
+                db.commit()
+                db.refresh(schedule)
+                logger.info(f"Created new schedule for post {post_id}")
+            
+            # Check if there's already a publish job within the last 30 minutes
+            now = datetime.utcnow()
+            thirty_minutes_ago = now - timedelta(minutes=30)
+            
+            recent_job = db.query(PublishJob).filter(
+                PublishJob.schedule_id == schedule.id,
+                PublishJob.planned_at >= thirty_minutes_ago
+            ).order_by(PublishJob.planned_at.desc()).first()
+            
+            if recent_job:
+                # Job already exists
+                logger.info(f"Publish job already exists for post {post_id}, status: {recent_job.status}")
+                return {
+                    "message": f"Job already planned. Status: {recent_job.status}",
+                    "job_id": recent_job.id,
+                    "status": recent_job.status,
+                    "planned_at": recent_job.planned_at.isoformat(),
+                    "already_exists": True
+                }
+            
+            # Create a new instant publish job
+            publish_job = PublishJob(
+                schedule_id=schedule.id,
+                planned_at=datetime.utcnow(),
+                status="pending",
+                dedupe_key=f"{schedule.id}_{datetime.utcnow().isoformat()}"
+            )
+            db.add(publish_job)
+            db.commit()
+            db.refresh(publish_job)
+            
+            logger.info(f"Created instant publish job {publish_job.id} for post {post_id}")
+            log_info(
+                action="instant_publish_job_created",
+                message=f"Created instant publish job {publish_job.id} for post {post_id}",
+                component="api",
+                extra_data=json.dumps({
+                    "post_id": post_id,
+                    "job_id": publish_job.id,
+                    "schedule_id": schedule.id
+                })
+            )
+            
+            return {
+                "message": "Publish job created successfully",
+                "job_id": publish_job.id,
+                "status": publish_job.status,
+                "planned_at": publish_job.planned_at.isoformat(),
+                "already_exists": False
+            }
+    
+    except Exception as e:
+        logger.error(f"Unexpected error in instant_publish: {str(e)}", exc_info=True)
+        log_error(
+            action="instant_publish_exception",
+            message=f"Exception while creating instant publish job",
             component="api",
             extra_data=json.dumps({"post_id": post_id, "error": str(e), "error_type": type(e).__name__})
         )
