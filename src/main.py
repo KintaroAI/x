@@ -10,7 +10,7 @@ import os
 import base64
 import httpx
 import tweepy
-from src.models import AuditLog
+from src.models import AuditLog, TokenManagement
 from src.database import get_db
 
 app = FastAPI(
@@ -183,6 +183,77 @@ async def create_test_audit_log():
         }
 
 
+async def get_or_refresh_token(service_name: str, client_id: str, client_secret: str) -> str:
+    """Get existing token from database or fetch a new one from Twitter API."""
+    from datetime import timedelta
+    
+    with get_db() as db:
+        # Check if we have a valid token in the database
+        existing_token = db.query(TokenManagement).filter(
+            TokenManagement.service_name == service_name,
+            TokenManagement.token_type == 'access_token'
+        ).first()
+        
+        # If token exists and hasn't expired (or doesn't have expiry), use it
+        if existing_token:
+            if existing_token.expires_at is None or existing_token.expires_at > datetime.utcnow():
+                return existing_token.token
+            # Token expired, update it instead of deleting
+            token_record_to_update = existing_token
+        else:
+            token_record_to_update = None
+        
+        # No valid token, fetch a new one
+        credentials = base64.b64encode(
+            f"{client_id}:{client_secret}".encode('utf-8')
+        ).decode('utf-8')
+        
+        async with httpx.AsyncClient() as client_http:
+            auth_response = await client_http.post(
+                'https://api.twitter.com/oauth2/token',
+                headers={
+                    'Authorization': f'Basic {credentials}',
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                },
+                data='grant_type=client_credentials'
+            )
+            
+            if auth_response.status_code != 200:
+                raise Exception(f"Failed to authenticate with Twitter API (status {auth_response.status_code}): {auth_response.text}")
+            
+            auth_data = auth_response.json()
+            access_token = auth_data.get('access_token')
+            
+            if not access_token:
+                raise Exception("Failed to obtain Twitter access token from response")
+            
+            # Store the new token in database
+            expires_in = auth_data.get('expires_in')  # Usually 7200 seconds (2 hours)
+            expires_at = None
+            if expires_in:
+                expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
+            
+            # Update existing record or create new one
+            if token_record_to_update:
+                token_record_to_update.token = access_token
+                token_record_to_update.expires_at = expires_at
+                token_record_to_update.updated_at = datetime.utcnow()
+            else:
+                token_record = TokenManagement(
+                    service_name=service_name,
+                    token_type='access_token',
+                    token=access_token,
+                    expires_at=expires_at,
+                    created_at=datetime.utcnow(),
+                    updated_at=datetime.utcnow()
+                )
+                db.add(token_record)
+            
+            db.commit()
+            
+            return access_token
+
+
 @app.post("/api/twitter/profile")
 async def get_twitter_profile(username: str = Form(...)):
     """Load a Twitter profile by username."""
@@ -206,42 +277,13 @@ async def get_twitter_profile(username: str = Form(...)):
         # Remove @ if present
         username = username.lstrip('@')
         
-        # For OAuth2 App-Only authentication, we need to obtain an access token first
-        # Encode credentials for OAuth2 App-Only flow
-        credentials = base64.b64encode(
-            f"{client_id}:{client_secret}".encode('utf-8')
-        ).decode('utf-8')
-        
-        # Request access token
-        async with httpx.AsyncClient() as client_http:
-            auth_response = await client_http.post(
-                'https://api.twitter.com/oauth2/token',
-                headers={
-                    'Authorization': f'Basic {credentials}',
-                    'Content-Type': 'application/x-www-form-urlencoded'
-                },
-                data='grant_type=client_credentials'
-            )
-            
-            if auth_response.status_code != 200:
-                return JSONResponse(
-                    status_code=500,
-                    content={"error": f"Failed to authenticate with Twitter API (status {auth_response.status_code}): {auth_response.text}"}
-                )
-            
-            try:
-                auth_data = auth_response.json()
-                access_token = auth_data.get('access_token') if auth_data else None
-            except Exception as e:
-                return JSONResponse(
-                    status_code=500,
-                    content={"error": f"Failed to parse Twitter auth response: {str(e)}"}
-                )
-        
-        if not access_token:
+        # Get or refresh access token (will reuse if it exists and is valid)
+        try:
+            access_token = await get_or_refresh_token("twitter", client_id, client_secret)
+        except Exception as e:
             return JSONResponse(
                 status_code=500,
-                content={"error": "Failed to obtain Twitter access token from response"}
+                content={"error": str(e)}
             )
         
         # Initialize Tweepy client with access token
