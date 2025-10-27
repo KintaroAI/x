@@ -162,9 +162,20 @@
     }
     
     function confirmDelete(postId) {
-        if (confirm('Are you sure you want to delete this post?')) {
-            deletePost(postId);
-        }
+        Swal.fire({
+            title: 'Are you sure?',
+            text: "You won't be able to revert this!",
+            icon: 'warning',
+            showCancelButton: true,
+            confirmButtonColor: '#3085d6',
+            cancelButtonColor: '#d33',
+            confirmButtonText: 'Yes, delete it!',
+            cancelButtonText: 'Cancel'
+        }).then((result) => {
+            if (result.isConfirmed) {
+                deletePost(postId);
+            }
+        });
     }
     
     function deletePost(postId) {
@@ -176,13 +187,25 @@
         })
         .then(response => response.json())
         .then(data => {
+            // Show success message
+            Swal.fire({
+                icon: 'success',
+                title: 'Deleted!',
+                text: 'Your post has been deleted.',
+                timer: 2000,
+                showConfirmButton: false
+            });
             // Reload posts to reflect the deletion
             const toggle = document.getElementById('show-deleted-toggle');
             loadPosts(toggle.checked);
         })
         .catch(error => {
             console.error('Error deleting post:', error);
-            alert('Failed to delete post. Please try again.');
+            Swal.fire({
+                icon: 'error',
+                title: 'Error',
+                text: 'Failed to delete post. Please try again.'
+            });
         });
     }
     
@@ -195,13 +218,25 @@
         })
         .then(response => response.json())
         .then(data => {
+            // Show success message
+            Swal.fire({
+                icon: 'success',
+                title: 'Restored!',
+                text: 'Your post has been restored.',
+                timer: 2000,
+                showConfirmButton: false
+            });
             // Reload posts to reflect the restoration
             const toggle = document.getElementById('show-deleted-toggle');
             loadPosts(toggle.checked);
         })
         .catch(error => {
             console.error('Error restoring post:', error);
-            alert('Failed to restore post. Please try again.');
+            Swal.fire({
+                icon: 'error',
+                title: 'Error',
+                text: 'Failed to restore post. Please try again.'
+            });
         });
     }
     
@@ -215,19 +250,38 @@
         .then(response => response.json())
         .then(data => {
             if (data.error) {
-                alert(`Error: ${data.error}`);
+                Swal.fire({
+                    icon: 'error',
+                    title: 'Publishing Failed',
+                    text: data.error
+                });
                 return;
             }
             
             if (data.already_exists) {
-                alert(`${data.message}\nStatus: ${data.status}\nPlanned at: ${new Date(data.planned_at).toLocaleString()}`);
+                Swal.fire({
+                    icon: 'info',
+                    title: 'Scheduled',
+                    html: `${data.message}<br><br><strong>Status:</strong> ${data.status}<br><strong>Planned at:</strong> ${new Date(data.planned_at).toLocaleString()}`,
+                    showConfirmButton: true
+                });
             } else {
-                alert(`${data.message}\nStatus: ${data.status}`);
+                Swal.fire({
+                    icon: 'success',
+                    title: 'Post Published!',
+                    text: `${data.message}. Status: ${data.status}`,
+                    timer: 3000,
+                    showConfirmButton: false
+                });
             }
         })
         .catch(error => {
             console.error('Error publishing post:', error);
-            alert('Failed to publish post. Please try again.');
+            Swal.fire({
+                icon: 'error',
+                title: 'Error',
+                text: 'Failed to publish post. Please try again.'
+            });
         });
     }
 </script>
