@@ -420,7 +420,7 @@ async def get_twitter_profile(username: str = Form(...)):
                 "name": profile_data.name,
                 "bio": profile_data.description or "",
                 "profile_image_url": profile_data.profile_image_url or "",
-                "profile_url": f"https://twitter.com/{profile_data.username}",
+                "profile_url": f"https://x.com/{profile_data.username}",
                 "verified": getattr(profile_data, 'verified', False),
                 "followers_count": getattr(profile_data, 'public_metrics', {}).get('followers_count', 0) if hasattr(profile_data, 'public_metrics') else 0,
             }
