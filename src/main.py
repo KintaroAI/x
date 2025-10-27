@@ -534,6 +534,23 @@ async def get_twitter_profile(username: str = Form(...)):
             status_code=404,
             content={"error": str(e)}
         )
+    except tweepy.TooManyRequests as e:
+        error_message = "Twitter API rate limit exceeded. Please try again later."
+        logger.error(f"Rate limit error in get_twitter_profile for {username}: {str(e)}")
+        log_error(
+            action="profile_fetch_rate_limit",
+            message=error_message,
+            component="twitter_api",
+            extra_data=json.dumps({
+                "username": username,
+                "error": str(e),
+                "retry_after": getattr(e.response, 'headers', {}).get('x-rate-limit-reset') if hasattr(e, 'response') else None
+            })
+        )
+        return JSONResponse(
+            status_code=429,
+            content={"error": error_message}
+        )
     except Exception as e:
         logger.error(f"Unexpected error in get_twitter_profile: {str(e)}", exc_info=True)
         log_error(
