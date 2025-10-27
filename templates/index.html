@@ -39,7 +39,13 @@
         <!-- Right Column: Posts List -->
         <div>
             <div class="bg-white rounded-lg shadow-lg p-8">
-                <h2 class="text-3xl font-semibold text-gray-800 mb-6 text-center">Draft Posts</h2>
+                <div class="flex justify-between items-center mb-6">
+                    <h2 class="text-3xl font-semibold text-gray-800">Draft Posts</h2>
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <span class="text-sm text-gray-600">Show deleted</span>
+                        <input type="checkbox" id="show-deleted-toggle" class="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500" />
+                    </label>
+                </div>
                 <div id="posts-container" class="space-y-4">
                     <p class="text-gray-600 text-center">Loading posts...</p>
                 </div>
@@ -49,52 +55,76 @@
 </div>
 
 <script>
-    // Fetch and display posts
-    fetch('/api/posts')
-        .then(response => response.json())
-        .then(posts => {
-            const container = document.getElementById('posts-container');
-            
-            if (posts.length === 0) {
-                container.innerHTML = '<p class="text-gray-600 text-center">No posts yet. Create your first post!</p>';
-                return;
-            }
-            
-            let html = '';
-            posts.forEach(post => {
-                const createdDate = new Date(post.created_at).toLocaleDateString('en-US', {
-                    year: 'numeric',
-                    month: 'short',
-                    day: 'numeric',
-                    hour: '2-digit',
-                    minute: '2-digit'
+    // Load posts based on include_deleted parameter
+    function loadPosts(includeDeleted = false) {
+        const url = includeDeleted ? '/api/posts?include_deleted=true' : '/api/posts';
+        
+        fetch(url)
+            .then(response => response.json())
+            .then(posts => {
+                const container = document.getElementById('posts-container');
+                
+                if (posts.length === 0) {
+                    container.innerHTML = '<p class="text-gray-600 text-center">No posts yet. Create your first post!</p>';
+                    return;
+                }
+                
+                let html = '';
+                posts.forEach(post => {
+                    const createdDate = new Date(post.created_at).toLocaleDateString('en-US', {
+                        year: 'numeric',
+                        month: 'short',
+                        day: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                    });
+                    
+                    const isDeleted = post.deleted || false;
+                    const borderColor = isDeleted ? 'border-red-300' : 'border-gray-200';
+                    const bgColor = isDeleted ? 'bg-red-50' : '';
+                    const textColor = isDeleted ? 'text-gray-500' : 'text-gray-800';
+                    const deleteBtn = isDeleted ? '' : `
+                        <button onclick="confirmDelete(${post.id})" class="text-red-500 hover:text-red-700 transition-colors" title="Delete post">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                            </svg>
+                        </button>
+                    `;
+                    const deletedBadge = isDeleted ? '<span class="text-xs bg-red-100 text-red-800 px-2 py-1 rounded">Deleted</span>' : '';
+                    
+                    html += `
+                        <div class="border ${borderColor} ${bgColor} rounded-lg p-4 hover:shadow-md transition-shadow" id="post-${post.id}">
+                            <div class="flex justify-between items-start mb-2">
+                                <div class="flex items-center gap-2">
+                                    <span class="text-xs font-semibold ${textColor}">Post #${post.id}</span>
+                                    ${deletedBadge}
+                                </div>
+                                <div class="flex items-center gap-2">
+                                    <span class="text-xs text-gray-400">${createdDate}</span>
+                                    ${deleteBtn}
+                                </div>
+                            </div>
+                            <p class="${textColor} ${isDeleted ? 'line-through opacity-50' : ''} whitespace-pre-wrap">${escapeHtml(post.text)}</p>
+                        </div>
+                    `;
                 });
                 
-                html += `
-                    <div class="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow" id="post-${post.id}">
-                        <div class="flex justify-between items-start mb-2">
-                            <span class="text-xs font-semibold text-gray-500">Post #${post.id}</span>
-                            <div class="flex items-center gap-2">
-                                <span class="text-xs text-gray-400">${createdDate}</span>
-                                <button onclick="confirmDelete(${post.id})" class="text-red-500 hover:text-red-700 transition-colors" title="Delete post">
-                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                                        <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                    </svg>
-                                </button>
-                            </div>
-                        </div>
-                        <p class="text-gray-800 whitespace-pre-wrap">${escapeHtml(post.text)}</p>
-                    </div>
-                `;
+                container.innerHTML = html;
+            })
+            .catch(error => {
+                console.error('Error fetching posts:', error);
+                document.getElementById('posts-container').innerHTML = 
+                    '<p class="text-red-600 text-center">Error loading posts. Please try again later.</p>';
             });
-            
-            container.innerHTML = html;
-        })
-        .catch(error => {
-            console.error('Error fetching posts:', error);
-            document.getElementById('posts-container').innerHTML = 
-                '<p class="text-red-600 text-center">Error loading posts. Please try again later.</p>';
-        });
+    }
+    
+    // Load posts on page load
+    loadPosts();
+    
+    // Add event listener to the toggle
+    document.getElementById('show-deleted-toggle').addEventListener('change', function(e) {
+        loadPosts(e.target.checked);
+    });
     
     function escapeHtml(text) {
         const map = {
@@ -122,17 +152,9 @@
         })
         .then(response => response.json())
         .then(data => {
-            // Remove the post from the DOM
-            const postElement = document.getElementById(`post-${postId}`);
-            if (postElement) {
-                postElement.remove();
-            }
-            
-            // Check if there are any posts left
-            const container = document.getElementById('posts-container');
-            if (container.children.length === 0) {
-                container.innerHTML = '<p class="text-gray-600 text-center">No posts yet. Create your first post!</p>';
-            }
+            // Reload posts to reflect the deletion
+            const toggle = document.getElementById('show-deleted-toggle');
+            loadPosts(toggle.checked);
         })
         .catch(error => {
             console.error('Error deleting post:', error);

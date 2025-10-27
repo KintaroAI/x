@@ -664,26 +664,32 @@ async def get_twitter_profile(username: str = Form(...)):
 
 
 @app.get("/api/posts")
-async def get_posts():
-    """Get all non-deleted posts."""
+async def get_posts(include_deleted: bool = False):
+    """Get all posts. Optionally include deleted posts."""
     try:
-        logger.debug("get_posts called")
+        logger.debug(f"get_posts called, include_deleted={include_deleted}")
         
         with get_db() as db:
-            posts = db.query(Post).filter(Post.deleted == False).order_by(Post.created_at.desc()).all()
+            query = db.query(Post)
+            
+            if not include_deleted:
+                query = query.filter(Post.deleted == False)
+            
+            posts = query.order_by(Post.created_at.desc()).all()
             
             result = [
                 {
                     "id": post.id,
                     "text": post.text,
                     "media_refs": post.media_refs,
+                    "deleted": post.deleted,
                     "created_at": post.created_at.isoformat(),
                     "updated_at": post.updated_at.isoformat(),
                 }
                 for post in posts
             ]
             
-            logger.info(f"Retrieved {len(result)} posts")
+            logger.info(f"Retrieved {len(result)} posts (include_deleted={include_deleted})")
             return result
     
     except Exception as e:
