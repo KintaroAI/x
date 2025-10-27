@@ -415,6 +415,12 @@ async def get_twitter_profile(username: str = Form(...)):
             profile_data = user.data
             logger.info(f"Successfully fetched profile for user: {username} (name: {profile_data.name})")
             
+            # Safely get public_metrics
+            public_metrics = getattr(profile_data, 'public_metrics', None)
+            followers_count = 0
+            if public_metrics and isinstance(public_metrics, dict):
+                followers_count = public_metrics.get('followers_count', 0)
+            
             result = {
                 "username": profile_data.username,
                 "name": profile_data.name,
@@ -422,7 +428,7 @@ async def get_twitter_profile(username: str = Form(...)):
                 "profile_image_url": profile_data.profile_image_url or "",
                 "profile_url": f"https://x.com/{profile_data.username}",
                 "verified": getattr(profile_data, 'verified', False),
-                "followers_count": getattr(profile_data, 'public_metrics', {}).get('followers_count', 0) if hasattr(profile_data, 'public_metrics') else 0,
+                "followers_count": followers_count,
             }
             
             log_info(
