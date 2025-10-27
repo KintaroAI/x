@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto">
+    <h1 class="text-3xl font-bold text-gray-900 mb-8">Create New Post</h1>
+    
+    <div class="bg-white rounded-lg shadow-lg p-8">
+        <form id="post-form" hx-post="/api/posts" hx-target="#result" hx-swap="innerHTML">
+            <div class="mb-6">
+                <label for="text" class="block text-sm font-medium text-gray-700 mb-2">
+                    Post Text
+                </label>
+                <textarea 
+                    id="text" 
+                    name="text" 
+                    rows="6" 
+                    class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+                    placeholder="What's happening?"></textarea>
+                <div class="mt-2 flex justify-between items-center">
+                    <span class="text-sm text-gray-500">Character count</span>
+                    <span id="char-count" class="text-sm font-medium text-gray-700">0/280</span>
+                </div>
+            </div>
+            
+            <div class="mb-6">
+                <label for="media_refs" class="block text-sm font-medium text-gray-700 mb-2">
+                    Media References (Optional)
+                </label>
+                <input 
+                    type="text" 
+                    id="media_refs" 
+                    name="media_refs" 
+                    class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    placeholder='["url1", "url2"] - JSON array of media URLs'>
+                <p class="mt-2 text-sm text-gray-500">Enter as JSON array of media URLs or IDs</p>
+            </div>
+            
+            <div id="result" class="mb-4"></div>
+            
+            <div class="flex space-x-4">
+                <button 
+                    type="submit" 
+                    class="flex-1 bg-blue-600 text-white px-6 py-3 rounded-lg font-semibold hover:bg-blue-700 transition-colors">
+                    Create Post
+                </button>
+                <a 
+                    href="/" 
+                    class="flex-1 bg-gray-200 text-gray-700 px-6 py-3 rounded-lg font-semibold hover:bg-gray-300 transition-colors text-center">
+                    Cancel
+                </a>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+    // Character counter
+    const textArea = document.getElementById('text');
+    const charCount = document.getElementById('char-count');
+    
+    textArea.addEventListener('input', function() {
+        const length = this.value.length;
+        charCount.textContent = `${length}/280`;
+        
+        // Change color to orange if over 280 (soft limit)
+        if (length > 280) {
+            charCount.classList.remove('text-gray-700');
+            charCount.classList.add('text-orange-600');
+        } else {
+            charCount.classList.remove('text-orange-600');
+            charCount.classList.add('text-gray-700');
+        }
+    });
+</script>
+{% endblock %}
+

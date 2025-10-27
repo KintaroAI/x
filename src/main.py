@@ -12,7 +12,7 @@ import httpx
 import tweepy
 import logging
 import json
-from src.models import AuditLog, TokenManagement, ProfileCache
+from src.models import AuditLog, TokenManagement, ProfileCache, Post
 from src.database import get_db
 from src.audit import log_info, log_error, log_warning
 
@@ -129,6 +129,12 @@ async def audit_log_page(request: Request):
 async def health_page(request: Request):
     """Health and status page."""
     return templates.TemplateResponse("health.html", {"request": request})
+
+
+@app.get("/create-post", response_class=HTMLResponse)
+async def create_post_page(request: Request):
+    """Post creation page."""
+    return templates.TemplateResponse("create_post.html", {"request": request})
 
 
 @app.get("/api/health")
@@ -654,6 +660,97 @@ async def get_twitter_profile(username: str = Form(...)):
         return JSONResponse(
             status_code=500,
             content={"error": str(e)}
+        )
+
+
+@app.post("/api/posts")
+async def create_post(text: str = Form(...), media_refs: str = Form(None)):
+    """Create a new post (draft)."""
+    try:
+        logger.debug(f"create_post called with text length: {len(text)}")
+        
+        # Validate text
+        if not text or len(text.strip()) == 0:
+            log_error(
+                action="post_create_empty",
+                message="Attempted to create post with empty text",
+                component="api",
+                extra_data=json.dumps({"text_length": len(text) if text else 0})
+            )
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Post text cannot be empty"}
+            )
+        
+        # Parse media_refs if provided
+        media_data = None
+        if media_refs:
+            try:
+                media_data = json.loads(media_refs)
+                if not isinstance(media_data, list):
+                    raise ValueError("media_refs must be a JSON array")
+            except json.JSONDecodeError as e:
+                log_error(
+                    action="post_create_invalid_media",
+                    message="Failed to parse media_refs JSON",
+                    component="api",
+                    extra_data=json.dumps({"error": str(e)})
+                )
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": "media_refs must be a valid JSON array"}
+                )
+        
+        # Create post in database
+        with get_db() as db:
+            post = Post(
+                text=text.strip(),
+                media_refs=json.dumps(media_data) if media_data else None,
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow()
+            )
+            db.add(post)
+            db.commit()
+            db.refresh(post)
+            
+            logger.info(f"Created new post with id: {post.id}")
+            log_info(
+                action="post_created",
+                message=f"Created new post with id {post.id}",
+                component="api",
+                extra_data=json.dumps({
+                    "post_id": post.id,
+                    "text_length": len(text),
+                    "has_media": media_data is not None
+                })
+            )
+            
+            # Return success response
+            return HTMLResponse(
+                f"""
+                <div class="bg-green-50 border border-green-200 text-green-800 px-4 py-3 rounded-lg">
+                    <h3 class="font-semibold mb-2">✓ Post Created Successfully</h3>
+                    <p class="text-sm">Post ID: {post.id}</p>
+                    <p class="text-sm">Created at: {post.created_at.strftime('%Y-%m-%d %H:%M:%S')}</p>
+                </div>
+                """
+            )
+    
+    except Exception as e:
+        logger.error(f"Unexpected error in create_post: {str(e)}", exc_info=True)
+        log_error(
+            action="post_create_exception",
+            message=f"Exception while creating post",
+            component="api",
+            extra_data=json.dumps({"error": str(e), "error_type": type(e).__name__})
+        )
+        return HTMLResponse(
+            f"""
+            <div class="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded-lg">
+                <h3 class="font-semibold mb-2">✗ Error Creating Post</h3>
+                <p class="text-sm">{str(e)}</p>
+            </div>
+            """
         )
 
 
