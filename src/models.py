@@ -118,7 +118,7 @@ class PublishJob(Base):
     planned_at = Column(DateTime, nullable=False, index=True)  # When this job was scheduled to run
     started_at = Column(DateTime, nullable=True)  # When execution actually started
     finished_at = Column(DateTime, nullable=True)  # When execution completed
-    status = Column(String(50), nullable=False, index=True)  # 'pending', 'running', 'completed', 'failed'
+    status = Column(String(50), nullable=False, index=True)  # 'pending', 'running', 'completed', 'failed', 'cancelled'
     error = Column(Text, nullable=True)  # Error message if status is 'failed'
     dedupe_key = Column(String(200), nullable=True, unique=True)  # For idempotency
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

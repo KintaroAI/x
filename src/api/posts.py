@@ -261,6 +261,8 @@ async def delete_post(post_id: int):
     try:
         logger.debug(f"delete_post called with post_id: {post_id}")
         
+        from src.models import Schedule, PublishJob
+        
         with get_db() as db:
             post = db.query(Post).filter(Post.id == post_id).first()
             
@@ -280,19 +282,40 @@ async def delete_post(post_id: int):
             # Soft delete - just mark as deleted
             post.deleted = True
             post.updated_at = datetime.utcnow()
+            
+            # Cancel all pending jobs related to this post
+            schedules = db.query(Schedule).filter(Schedule.post_id == post_id).all()
+            cancelled_count = 0
+            
+            for schedule in schedules:
+                # Update all pending publish jobs to cancelled
+                pending_jobs = db.query(PublishJob).filter(
+                    PublishJob.schedule_id == schedule.id,
+                    PublishJob.status == "pending"
+                ).all()
+                
+                for job in pending_jobs:
+                    job.status = "cancelled"
+                    job.updated_at = datetime.utcnow()
+                    cancelled_count += 1
+                    logger.info(f"Cancelled publish job {job.id} for deleted post {post_id}")
+            
             db.commit()
             
-            logger.info(f"Soft deleted post with id: {post_id}")
+            extra_data = {"post_id": post_id, "cancelled_jobs": cancelled_count}
+            logger.info(f"Soft deleted post with id: {post_id}, cancelled {cancelled_count} pending jobs")
+            
             log_info(
                 action="post_deleted",
-                message=f"Soft deleted post with id {post_id}",
+                message=f"Soft deleted post with id {post_id}, cancelled {cancelled_count} pending jobs",
                 component="api",
-                extra_data=json.dumps({"post_id": post_id})
+                extra_data=json.dumps(extra_data)
             )
             
             return {
                 "id": post.id,
                 "deleted": True,
+                "cancelled_jobs": cancelled_count,
                 "message": "Post deleted successfully"
             }
     
