@@ -189,6 +189,33 @@ async def create_test_audit_log():
         }
 
 
+def format_user_object(raw_user: dict) -> dict:
+    """
+    Convert a raw Twitter user object into backward-compatible format.
+    
+    Args:
+        raw_user: Dictionary containing the full user object from Twitter API
+        
+    Returns:
+        Dictionary with fields expected by the frontend
+    """
+    # Extract followers_count from public_metrics if available
+    followers_count = 0
+    public_metrics = raw_user.get("public_metrics")
+    if public_metrics and isinstance(public_metrics, dict):
+        followers_count = public_metrics.get("followers_count", 0)
+    
+    return {
+        "username": raw_user.get("username"),
+        "name": raw_user.get("name"),
+        "description": raw_user.get("description") or raw_user.get("bio") or "",
+        "profile_image_url": raw_user.get("profile_image_url") or "",
+        "profile_url": f"https://x.com/{raw_user.get('username')}",
+        "verified": raw_user.get("verified", False),
+        "followers_count": followers_count,
+    }
+
+
 async def get_or_refresh_token(service_name: str, client_id: str, client_secret: str) -> str:
     """Get existing token from database or fetch a new one from Twitter API."""
     from datetime import timedelta
@@ -360,21 +387,7 @@ async def get_or_fetch_profile(username: str, client_id: str, client_secret: str
                 extra_data=json.dumps({"username": username, "fetched_at": cached_profile.fetched_at.isoformat(), "expires_at": cached_profile.expires_at.isoformat()})
             )
             # Return cached data - convert full user object to backward-compatible format
-            cached_user = cached_profile.raw
-            result = {
-                "username": cached_user.get("username"),
-                "name": cached_user.get("name"),
-                "bio": cached_user.get("description") or cached_user.get("bio") or "",
-                "profile_image_url": cached_user.get("profile_image_url") or "",
-                "profile_url": cached_user.get("profile_url") or f"https://x.com/{cached_user.get('username')}",
-                "verified": cached_user.get("verified", False),
-                "followers_count": 0,
-            }
-            # Extract followers_count from public_metrics if available
-            public_metrics = cached_user.get("public_metrics")
-            if public_metrics and isinstance(public_metrics, dict):
-                result["followers_count"] = public_metrics.get("followers_count", 0)
-            return result
+            return format_user_object(cached_profile.raw)
         
         # Cache expired or doesn't exist, fetch from API
         logger.info(f"Cached profile expired or not found for {username}, fetching from API")
@@ -418,31 +431,12 @@ async def get_or_fetch_profile(username: str, client_id: str, client_secret: str
     
     # Store the full user object as a dictionary
     # Convert the tweepy user object to a dict (Tweepy v4+ uses Pydantic models)
-    full_user_dict = profile_data.model_dump(mode='json')
+    cache_data = profile_data.model_dump(mode='json')
     
-    # Build a result dict with fields for backward compatibility with the frontend
-    # The full user object will be stored in the cache
-    result = {
-        "username": profile_data.username,
-        "name": profile_data.name,
-        "bio": profile_data.description or "",  # Frontend expects "bio" for "description"
-        "profile_image_url": profile_data.profile_image_url or "",
-        "profile_url": f"https://x.com/{profile_data.username}",
-        "verified": getattr(profile_data, 'verified', False),
-        "followers_count": 0,
-    }
-    
-    # Extract followers_count from public_metrics if available
-    public_metrics = getattr(profile_data, 'public_metrics', None)
-    if public_metrics and isinstance(public_metrics, dict):
-        result["followers_count"] = public_metrics.get('followers_count', 0)
+    # Convert to backward-compatible format for API response
+    result = format_user_object(cache_data)
     
     logger.info(f"Fetched profile from API for {username}")
-    
-    # IMPORTANT: Store the FULL user object in the cache's raw field
-    # Replace result with full_user_dict for database storage
-    cache_data = full_user_dict
-    cache_data["profile_url"] = f"https://x.com/{profile_data.username}"  # Add computed field
     
     # Cache the result
     fetched_at = datetime.utcnow()
