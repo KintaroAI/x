@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+
+{% block title %}Health - X Scheduler{% endblock %}
+
+{% block content %}
+<div class="max-w-2xl mx-auto">
+    <h1 class="text-4xl font-bold text-gray-900 mb-8">Health & Status</h1>
+    
+    <div class="bg-white rounded-lg shadow p-6 mb-6">
+        <h2 class="text-2xl font-semibold text-gray-800 mb-4">Hello World Example</h2>
+        
+        <button
+            hx-get="/api/hello"
+            hx-target="#response"
+            hx-swap="innerHTML"
+            class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded transition-colors"
+        >
+            Call API
+        </button>
+        
+        <div id="response" class="mt-4 p-4 bg-gray-100 rounded border border-gray-300">
+            <p class="text-gray-600">Click the button to see the API response</p>
+        </div>
+        
+        <script>
+            document.body.addEventListener('htmx:afterSwap', function(evt) {
+                // Format JSON responses nicely
+                if (evt.detail.target.id === 'response') {
+                    const target = evt.detail.target;
+                    try {
+                        const data = JSON.parse(target.innerHTML);
+                        target.innerHTML = `
+                            <pre class="bg-white p-4 rounded border border-gray-300 overflow-x-auto">
+                                <code class="text-sm">${JSON.stringify(data, null, 2)}</code>
+                            </pre>
+                        `;
+                    } catch (e) {
+                        // Not JSON, leave as is
+                    }
+                }
+            });
+        </script>
+    </div>
+
+    <div class="bg-white rounded-lg shadow p-6">
+        <h2 class="text-2xl font-semibold text-gray-800 mb-4">Status</h2>
+        <div hx-get="/health" hx-trigger="load" hx-swap="innerHTML">
+            <p class="text-gray-600">Loading...</p>
+        </div>
+    </div>
+    
+    <div class="bg-white rounded-lg shadow p-6 mt-6">
+        <h2 class="text-2xl font-semibold text-gray-800 mb-4">How it works</h2>
+        <div class="space-y-3 text-gray-700">
+            <p><strong>1. HTMX:</strong> Click "Call API" to trigger an AJAX request without writing JavaScript.</p>
+            <p><strong>2. FastAPI:</strong> The backend serves both HTML and API endpoints.</p>
+            <p><strong>3. Tailwind CSS:</strong> Styling is done with utility classes.</p>
+        </div>
+    </div>
+
+    <div class="bg-white rounded-lg shadow p-6 mt-6">
+        <h2 class="text-2xl font-semibold text-gray-800 mb-4">Twitter Profile Loader</h2>
+        
+        <div class="mb-4">
+            <label for="twitter-username" class="block text-sm font-medium text-gray-700 mb-2">
+                Username
+            </label>
+            <div class="flex space-x-2">
+                <input
+                    type="text"
+                    id="twitter-username"
+                    name="username"
+                    placeholder="username or @username"
+                    class="flex-1 px-4 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <button
+                    hx-post="/api/twitter/profile"
+                    hx-target="#twitter-profile-result"
+                    hx-swap="innerHTML"
+                    hx-include="#twitter-username"
+                    hx-trigger="click"
+                    hx-indicator="#twitter-loading"
+                    class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded transition-colors"
+                >
+                    Load Profile
+                </button>
+            </div>
+            <div id="twitter-loading" class="htmx-indicator mt-2">
+                <p class="text-blue-600">Loading profile...</p>
+            </div>
+        </div>
+        
+        <div id="twitter-profile-result">
+            <div class="bg-gray-50 border border-gray-200 rounded p-4 text-gray-600 text-center">
+                Enter a username and click "Load Profile" to see the Twitter profile
+            </div>
+        </div>
+        
+        <script>
+            // Handle Twitter profile loading
+            document.body.addEventListener('htmx:afterRequest', function(evt) {
+                const target = evt.detail.target;
+                // Check if this is our Twitter profile request
+                if (target && target.id === 'twitter-profile-result') {
+                    // Parse JSON if successful
+                    if (evt.detail.xhr.status === 200) {
+                        try {
+                            const data = JSON.parse(evt.detail.xhr.responseText);
+                            const description = data.description || data.bio || "No bio available";
+                            const profileImageUrl = data.profile_image_url || "";
+                            const profileUrl = data.profile_url;
+                            const username = data.username;
+                            const name = data.name;
+                            
+                            let html = `
+                                <div class="bg-white border border-gray-200 rounded-2xl shadow-sm p-6 transition-shadow hover:shadow-md">
+                                    <div class="flex items-start space-x-4">
+                                        ${profileImageUrl ? `<img src="${profileImageUrl}" alt="${name}'s profile" class="w-16 h-16 rounded-full object-cover border-2 border-gray-200">` : '<div class="w-16 h-16 bg-gray-200 rounded-full flex items-center justify-center"><svg class="w-8 h-8 text-gray-400" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd"></path></svg></div>'}
+                                        <div class="flex-1">
+                                            <div class="flex items-center space-x-2">
+                                                <h3 class="text-xl font-bold text-gray-900">${name || 'Unknown'}</h3>
+                                                ${data.verified ? '<svg class="w-5 h-5 text-blue-500" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M6.267 3.455a3.066 3.066 0 001.745-.723 3.066 3.066 0 013.976 0 3.066 3.066 0 001.745.723 3.066 3.066 0 012.812 2.812c.051.643.304 1.254.723 1.745a3.066 3.066 0 010 3.976 3.066 3.066 0 00-.723 1.745 3.066 3.066 0 01-2.812 2.812 3.066 3.066 0 00-1.745.723 3.066 3.066 0 01-3.976 0 3.066 3.066 0 00-1.745-.723 3.066 3.066 0 01-2.812-2.812 3.066 3.066 0 00-.723-1.745 3.066 3.066 0 010-3.976 3.066 3.066 0 00.723-1.745 3.066 3.066 0 012.812-2.812zm7.44 5.252a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path></svg>' : ''}
+                                            </div>
+                                            <p class="text-gray-500">
+                                                <a href="${profileUrl}" target="_blank" rel="noopener noreferrer" class="hover:underline">
+                                                    @${username}
+                                                </a>
+                                            </p>
+                                            ${data.location ? `<p class="text-gray-500 mt-1 flex items-center"><svg class="w-4 h-4 mr-1" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z" clip-rule="evenodd"></path></svg> ${data.location}</p>` : ''}
+                                            ${description && description !== "No bio available" ? `<p class="text-gray-800 mt-3 leading-relaxed">${description}</p>` : ''}
+                                            <div class="flex items-center space-x-6 mt-4 text-sm text-gray-600">
+                                                ${data.following_count !== undefined ? `<a href="${profileUrl}/following" target="_blank" class="hover:underline"><span class="font-bold text-gray-900">${data.following_count.toLocaleString()}</span> <span class="text-gray-500">Following</span></a>` : ''}
+                                                ${data.followers_count !== undefined ? `<a href="${profileUrl}/followers" target="_blank" class="hover:underline"><span class="font-bold text-gray-900">${data.followers_count.toLocaleString()}</span> <span class="text-gray-500">Followers</span></a>` : ''}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            `;
+                            target.innerHTML = html;
+                        } catch (e) {
+                            console.error('Error parsing profile data:', e);
+                            // Not JSON, leave as is
+                        }
+                    } else {
+                        // Error occurred, parse JSON error message
+                        try {
+                            const error = JSON.parse(evt.detail.xhr.responseText);
+                            target.innerHTML = `
+                                <div class="bg-red-50 border border-red-300 rounded p-4 text-red-700">
+                                    Error: ${error.error || 'Failed to load profile'}
+                                </div>
+                            `;
+                        } catch (e) {
+                            console.error('Error parsing error response:', e);
+                            // Response isn't JSON
+                        }
+                    }
+                }
+            });
+        </script>
+    </div>
+</div>
+{% endblock %}
+

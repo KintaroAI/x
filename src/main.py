@@ -125,6 +125,12 @@ async def audit_log_page(request: Request):
     return templates.TemplateResponse("audit_log.html", {"request": request})
 
 
+@app.get("/health-ux", response_class=HTMLResponse)
+async def health_page(request: Request):
+    """Health and status page."""
+    return templates.TemplateResponse("health.html", {"request": request})
+
+
 @app.get("/api/health")
 async def health():
     """Health check endpoint (JSON)."""
