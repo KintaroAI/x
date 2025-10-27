@@ -663,6 +663,43 @@ async def get_twitter_profile(username: str = Form(...)):
         )
 
 
+@app.get("/api/posts")
+async def get_posts():
+    """Get all posts."""
+    try:
+        logger.debug("get_posts called")
+        
+        with get_db() as db:
+            posts = db.query(Post).order_by(Post.created_at.desc()).all()
+            
+            result = [
+                {
+                    "id": post.id,
+                    "text": post.text,
+                    "media_refs": post.media_refs,
+                    "created_at": post.created_at.isoformat(),
+                    "updated_at": post.updated_at.isoformat(),
+                }
+                for post in posts
+            ]
+            
+            logger.info(f"Retrieved {len(result)} posts")
+            return result
+    
+    except Exception as e:
+        logger.error(f"Unexpected error in get_posts: {str(e)}", exc_info=True)
+        log_error(
+            action="posts_fetch_exception",
+            message=f"Exception while fetching posts",
+            component="api",
+            extra_data=json.dumps({"error": str(e), "error_type": type(e).__name__})
+        )
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e)}
+        )
+
+
 @app.post("/api/posts")
 async def create_post(text: str = Form(...), media_refs: str = Form(None)):
     """Create a new post (draft)."""
