@@ -226,15 +226,22 @@ async def get_twitter_profile(username: str = Form(...)):
             if auth_response.status_code != 200:
                 return JSONResponse(
                     status_code=500,
-                    content={"error": f"Failed to authenticate with Twitter API: {auth_response.text}"}
+                    content={"error": f"Failed to authenticate with Twitter API (status {auth_response.status_code}): {auth_response.text}"}
                 )
             
-            access_token = auth_response.json().get('access_token')
+            try:
+                auth_data = auth_response.json()
+                access_token = auth_data.get('access_token') if auth_data else None
+            except Exception as e:
+                return JSONResponse(
+                    status_code=500,
+                    content={"error": f"Failed to parse Twitter auth response: {str(e)}"}
+                )
         
         if not access_token:
             return JSONResponse(
                 status_code=500,
-                content={"error": "Failed to obtain Twitter access token"}
+                content={"error": "Failed to obtain Twitter access token from response"}
             )
         
         # Initialize Tweepy client with access token
