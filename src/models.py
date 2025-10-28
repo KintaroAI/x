@@ -96,6 +96,7 @@ class Schedule(Base):
     schedule_spec = Column(Text, nullable=False)  # Cron string, RRULE, or ISO datetime for one_shot
     timezone = Column(String(100), nullable=True, default="UTC")
     next_run_at = Column(DateTime, nullable=True, index=True)  # Next scheduled execution time
+    last_run_at = Column(DateTime, nullable=True)  # Last actual execution time
     enabled = Column(Boolean, default=True, nullable=False, index=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
@@ -116,9 +117,11 @@ class PublishJob(Base):
     id = Column(Integer, primary_key=True, index=True)
     schedule_id = Column(Integer, ForeignKey("schedules.id"), nullable=False)
     planned_at = Column(DateTime, nullable=False, index=True)  # When this job was scheduled to run
+    enqueued_at = Column(DateTime, nullable=True)  # When job was enqueued to Celery
     started_at = Column(DateTime, nullable=True)  # When execution actually started
     finished_at = Column(DateTime, nullable=True)  # When execution completed
-    status = Column(String(50), nullable=False, index=True)  # 'pending', 'running', 'completed', 'failed', 'cancelled'
+    status = Column(String(50), nullable=False, index=True, default="planned")  # planned, enqueued, running, succeeded, failed, cancelled, dead_letter
+    attempt = Column(Integer, default=0, nullable=False)  # Retry attempt number
     error = Column(Text, nullable=True)  # Error message if status is 'failed'
     dedupe_key = Column(String(200), nullable=True, unique=True)  # For idempotency
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

@@ -67,6 +67,7 @@ services:
       - X_CLIENT_SECRET=${X_CLIENT_SECRET}
       - X_REDIRECT_URI=${X_REDIRECT_URI}
       - ENVIRONMENT=${ENVIRONMENT:-dev}
+      - X_API_TIER=${X_API_TIER:-basic}
     depends_on:
       db:
         condition: service_healthy
@@ -75,7 +76,27 @@ services:
     volumes:
       - ./src:/app/src
       - ./templates:/app/templates
-    command: python -m src.worker
+    command: celery -A src.celery_app worker --loglevel=info --queues=publish,metrics,media,scheduler,dlq --concurrency=2
+
+  beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    profiles: ["dev", "prod"]
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-app_db}
+      - REDIS_URL=redis://redis:6379/0
+      - ENVIRONMENT=${ENVIRONMENT:-dev}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./src:/app/src
+    command: celery -A src.celery_app beat --loglevel=info
 
 volumes:
   postgres_data:
