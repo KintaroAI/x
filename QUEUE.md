@@ -90,6 +90,9 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 # Create Celery app
 app = Celery("posting_worker")
 
+# Expose API tier for rate limiting annotations (used in §8.2)
+API_TIER = os.getenv("X_API_TIER", "basic")
+
 # Configure Celery
 app.conf.update(
     broker_url=REDIS_URL,
@@ -121,6 +124,14 @@ app.conf.task_routes = {
 
 # Ignore results to reduce Redis churn (results not needed)
 app.conf.task_ignore_result = True
+
+# (Optional) Use a custom Task base that binds correlation IDs (see §11.4)
+# so all tasks benefit without per-task inheritance.
+try:
+    from .observability import CustomTask  # wherever §11.4 lives
+    app.Task = CustomTask
+except Exception:
+    pass
 ```
 
 **Note:** Use task names (like `"scheduler.tick"`) not module paths in `task_routes`. Rate limits should be set in task decorators or `task_annotations`, NOT in `task_routes`.
@@ -209,9 +220,30 @@ def scheduler_tick():
     ).with_for_update(skip_locked=True).all()
     
     for schedule in due_schedules:
-        # Create publish_jobs
-        # Enqueue tasks with ETA
-        # Update next_run_at
+        planned_at = schedule.next_run_at
+
+        # Redis dedupe guard (see §5.1). If another scheduler won the lock, skip.
+        if not acquire_dedupe_lock(schedule.id, planned_at):
+            continue
+
+        # Insert publish_jobs row in 'planned' state (DB idempotency via unique(schedule_id, planned_at))
+        job = PublishJob(
+            schedule_id=schedule.id,
+            planned_at=planned_at,
+            status="planned",
+        )
+        db.add(job)
+        db.flush()  # get job.id
+
+        # Enqueue publish task with ETA and update job status
+        publish_post.apply_async(kwargs={"job_id": str(job.id)}, eta=planned_at)
+        job.status = "enqueued"
+        job.enqueued_at = datetime.utcnow()
+
+        # Compute and persist next_run_at for this schedule
+        schedule.next_run_at = ScheduleResolver().resolve_schedule(schedule)
+
+    db.commit()
 ```
 
 #### 4.3 Periodic Scheduler Beat
@@ -232,9 +264,13 @@ app.conf.beat_schedule = {
 
 #### 5.1 Redis Guards
 ```python
-def acquire_dedupe_lock(schedule_id: int, planned_at: datetime) -> bool:
-    """Acquire Redis lock for deduplication."""
+from typing import Union
+from uuid import UUID
+
+def acquire_dedupe_lock(schedule_id: Union[str, UUID], planned_at: datetime) -> bool:
+    """Acquire Redis lock for deduplication (idempotent enqueue)."""
     key = f"dedupe:{schedule_id}:{planned_at.isoformat()}"
+    # Use SET with NX + EX (expiry). Do NOT use setnx(); it cannot set expiry.
     return redis_client.set(key, "1", nx=True, ex=172800)  # 2 days TTL
 ```
 
@@ -254,9 +290,9 @@ class PublishJobStateMachine:
         "enqueued": ["running", "cancelled"],
         "running": ["succeeded", "failed"],
         "failed": ["running", "dead_letter"],  # retry or give up
-        "succeeded": [],  # terminal
-        "dead_letter": [],  # terminal
-        "cancelled": [],  # terminal - consistency with DB enum
+        "succeeded": [],        # terminal
+        "dead_letter": [],      # terminal
+        "cancelled": [],        # terminal (explicitly supported)
     }
 ```
 
@@ -334,9 +370,7 @@ RATE_LIMITS = {
 ```python
 # Apply rate limits via task_annotations
 app.conf.task_annotations = {
-    "publish.post": {
-        "rate_limit": RATE_LIMITS[API_TIER]
-    }
+    "publish.post": {"rate_limit": RATE_LIMITS[API_TIER]}
 }
 
 # Alternative: Set rate_limit in task decorator directly
@@ -505,6 +539,9 @@ class CustomTask(Task):
         )
         
         return super().__call__(*args, **kwargs)
+
+# In Celery app setup (see §2.2), bind as default Task:
+# app.Task = CustomTask
 ```
 
 ### Phase 12: Deployment & Configuration
