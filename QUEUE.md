@@ -90,9 +90,6 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 # Create Celery app
 app = Celery("posting_worker")
 
-# Pull posting tier for rate limits (used in §8.2)
-API_TIER = os.getenv("X_API_TIER", "basic")
-
 # Configure Celery
 app.conf.update(
     broker_url=REDIS_URL,
@@ -109,6 +106,10 @@ app.conf.update(
     task_acks_late=True,
     worker_disable_rate_limits=False,
 )
+
+# ---- Rate-limit tier used in §8.2 ----
+# Accepts: free|basic|pro|enterprise
+API_TIER = os.getenv("X_API_TIER", "basic")
 ```
 
 #### 2.2 Queue Configuration
@@ -214,11 +215,13 @@ def scheduler_tick():
     """Main scheduler loop - runs every minute via Celery Beat."""
     # IMPORTANT: Use SELECT ... FOR UPDATE SKIP LOCKED for safe multi-scheduler sharding
     # This allows multiple scheduler instances to safely share work without conflicts
-    due_schedules = db.query(Schedule).filter(
-        Schedule.next_run_at <= datetime.utcnow(),
-        Schedule.active == True
-    ).with_for_update(skip_locked=True).all()
-    
+    due_schedules = (
+        db.query(Schedule)
+        .filter(Schedule.next_run_at <= datetime.utcnow(), Schedule.active.is_(True))
+        .with_for_update(skip_locked=True)
+        .all()
+    )
+
     for schedule in due_schedules:
         planned_at = schedule.next_run_at
 
@@ -242,6 +245,7 @@ def scheduler_tick():
 
         # Compute and persist next run
         schedule.next_run_at = ScheduleResolver().resolve_schedule(schedule)
+        schedule.last_run_at = planned_at
 
     db.commit()
 ```
