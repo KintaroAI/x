@@ -90,7 +90,7 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 # Create Celery app
 app = Celery("posting_worker")
 
-# Expose API tier for rate limiting annotations (used in §8.2)
+# Pull posting tier for rate limits (used in §8.2)
 API_TIER = os.getenv("X_API_TIER", "basic")
 
 # Configure Celery
@@ -222,11 +222,11 @@ def scheduler_tick():
     for schedule in due_schedules:
         planned_at = schedule.next_run_at
 
-        # Redis dedupe guard (see §5.1). If another scheduler won the lock, skip.
+        # Redis dedupe guard (idempotent across multiple schedulers)
         if not acquire_dedupe_lock(schedule.id, planned_at):
             continue
 
-        # Insert publish_jobs row in 'planned' state (DB idempotency via unique(schedule_id, planned_at))
+        # Insert publish_jobs row (DB idempotency via unique(schedule_id, planned_at))
         job = PublishJob(
             schedule_id=schedule.id,
             planned_at=planned_at,
@@ -235,12 +235,12 @@ def scheduler_tick():
         db.add(job)
         db.flush()  # get job.id
 
-        # Enqueue publish task with ETA and update job status
+        # Enqueue publish task with ETA
         publish_post.apply_async(kwargs={"job_id": str(job.id)}, eta=planned_at)
         job.status = "enqueued"
         job.enqueued_at = datetime.utcnow()
 
-        # Compute and persist next_run_at for this schedule
+        # Compute and persist next run
         schedule.next_run_at = ScheduleResolver().resolve_schedule(schedule)
 
     db.commit()
