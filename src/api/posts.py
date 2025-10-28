@@ -433,21 +433,29 @@ async def instant_publish(post_id: int):
             now = datetime.utcnow()
             thirty_minutes_ago = now - timedelta(minutes=30)
             
-            recent_job = db.query(PublishJob).filter(
+            recent_jobs = db.query(PublishJob).filter(
                 PublishJob.schedule_id == schedule.id,
                 PublishJob.planned_at >= thirty_minutes_ago
-            ).order_by(PublishJob.planned_at.desc()).first()
+            ).order_by(PublishJob.planned_at.desc()).all()
             
-            if recent_job:
-                # Job already exists
-                logger.info(f"Publish job already exists for post {post_id}, status: {recent_job.status}")
-                return {
-                    "message": f"Job already planned. Status: {recent_job.status}",
-                    "job_id": recent_job.id,
-                    "status": recent_job.status,
-                    "planned_at": recent_job.planned_at.isoformat(),
-                    "already_exists": True
-                }
+            if recent_jobs:
+                # Check if all recent jobs are cancelled
+                non_cancelled_jobs = [job for job in recent_jobs if job.status != "cancelled"]
+                
+                if non_cancelled_jobs:
+                    # There are non-cancelled jobs - block publishing
+                    most_recent_job = recent_jobs[0]
+                    logger.info(f"Publish job already exists for post {post_id}, status: {most_recent_job.status}")
+                    return {
+                        "message": f"Job already planned. Status: {most_recent_job.status}",
+                        "job_id": most_recent_job.id,
+                        "status": most_recent_job.status,
+                        "planned_at": most_recent_job.planned_at.isoformat(),
+                        "already_exists": True
+                    }
+                else:
+                    # All recent jobs are cancelled - allow publishing
+                    logger.info(f"All recent jobs are cancelled for post {post_id}, allowing new publish")
             
             # Create a new instant publish job
             publish_job = PublishJob(
