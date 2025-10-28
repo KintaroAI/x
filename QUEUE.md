@@ -30,15 +30,18 @@ This document outlines the implementation plan for transitioning from the curren
 -- Add missing fields to publish_jobs table
 ALTER TABLE publish_jobs ADD COLUMN enqueued_at TIMESTAMPTZ;
 ALTER TABLE publish_jobs ADD COLUMN attempt INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE publish_jobs ADD COLUMN last_run_at TIMESTAMPTZ;
+ALTER TABLE publish_jobs ADD COLUMN started_at TIMESTAMPTZ;  -- if not already present
+ALTER TABLE publish_jobs ADD COLUMN finished_at TIMESTAMPTZ;  -- track completion time
 
 -- Update status enum to match new state machine
 -- Current: 'pending', 'running', 'completed', 'failed', 'cancelled'
--- New: 'planned', 'enqueued', 'running', 'succeeded', 'failed', 'dead_letter'
+-- New: 'planned', 'enqueued', 'running', 'succeeded', 'failed', 'cancelled', 'dead_letter'
 
--- Add unique constraint for idempotency
+-- Add unique constraint for idempotency (prevents duplicate jobs)
 ALTER TABLE publish_jobs ADD CONSTRAINT unique_schedule_planned_at 
 UNIQUE (schedule_id, planned_at);
+
+-- Note: Existing started_at/finished_at in model may already cover this
 ```
 
 #### 1.2 Add Post Status Field
@@ -93,8 +96,12 @@ app.conf.task_routes = {
     "src.tasks.publish_post": {"queue": "publish"},
     "src.tasks.capture_metrics": {"queue": "metrics"},
     "src.tasks.prepare_media": {"queue": "media"},
-    "src.tasks.dead_letter_handler": {"queue": "dlq"},
+    "src.tasks.scheduler_tick": {"queue": "scheduler"},
+    "src.tasks.process_dead_letter": {"queue": "dlq"},
 }
+
+# Optional: ignore results to reduce Redis churn
+app.conf.task_ignore_result = True
 ```
 
 ### Phase 3: Task Definitions
@@ -110,10 +117,12 @@ app.conf.task_routes = {
     retry_backoff=True,
     retry_jitter=True,
     rate_limit="5/m",  # Adjust based on X API limits
+    task_ignore_result=True,
 )
 def publish_post(job_id: str):
     """Publish a post to X/Twitter."""
     # Implementation details below
+    # Include early-exit if job already terminal (idempotency)
 ```
 
 #### 3.2 Metrics Capture Task
@@ -162,13 +171,27 @@ class ScheduleResolver:
 
 #### 4.2 Scheduler Worker
 ```python
-@app.task(name="scheduler.tick", queue="scheduler")
+@app.task(name="scheduler.tick")
 def scheduler_tick():
-    """Main scheduler loop - runs every minute."""
+    """Main scheduler loop - runs every minute via Celery Beat."""
+    # Use SELECT ... FOR UPDATE SKIP LOCKED for safe sharding
     # Find due schedules
     # Create publish_jobs
     # Enqueue tasks with ETA
     # Update next_run_at
+```
+
+#### 4.3 Periodic Scheduler Beat
+```python
+# Register in celery_app.py
+from celery.schedules import crontab
+
+app.conf.beat_schedule = {
+    "scheduler-tick": {
+        "task": "scheduler.tick",
+        "schedule": crontab(minute="*"),  # Every minute
+    },
+}
 ```
 
 ### Phase 5: Idempotency & Deduplication
@@ -178,7 +201,7 @@ def scheduler_tick():
 def acquire_dedupe_lock(schedule_id: int, planned_at: datetime) -> bool:
     """Acquire Redis lock for deduplication."""
     key = f"dedupe:{schedule_id}:{planned_at.isoformat()}"
-    return redis_client.setnx(key, "1", ex=172800)  # 2 days TTL
+    return redis_client.set(key, "1", nx=True, ex=172800)  # 2 days TTL
 ```
 
 #### 5.2 Database Constraints
@@ -199,7 +222,7 @@ class PublishJobStateMachine:
         "failed": ["running", "dead_letter"],  # retry or give up
         "succeeded": [],  # terminal
         "dead_letter": [],  # terminal
-        "cancelled": [],  # terminal
+        "cancelled": [],  # terminal - consistency with DB enum
     }
 ```
 
@@ -252,7 +275,7 @@ class RetryStrategy:
 
 #### 7.2 Dead Letter Queue
 ```python
-@app.task(name="dlq.process", queue="dlq")
+@app.task(name="process_dead_letter", queue="dlq")
 def process_dead_letter(job_id: int):
     """Process jobs that have exhausted retries."""
     # Log final error
@@ -275,10 +298,9 @@ RATE_LIMITS = {
 
 #### 8.2 Celery Rate Limiting
 ```python
-# Apply rate limits to publish tasks
-app.conf.task_routes = {
+# Apply rate limits via task_annotations (rate limits not supported in task_routes)
+app.conf.task_annotations = {
     "publish.post": {
-        "queue": "publish",
         "rate_limit": RATE_LIMITS[API_TIER]
     }
 }
@@ -291,10 +313,11 @@ app.conf.task_routes = {
 class MetricsPollingStrategy:
     """Manages metrics collection cadence."""
     
+    # All times in minutes for consistency
     POLLING_SCHEDULE = {
         "fast": [15, 30, 60, 120],  # minutes
-        "medium": [240, 480, 720],  # hours  
-        "slow": [1440, 2880, 4320, 5760, 7200, 8640, 10080]  # days
+        "medium": [240, 480, 720],  # hours converted to minutes (4h, 8h, 12h)
+        "slow": [1440, 2880, 4320, 5760, 7200, 8640, 10080]  # days converted to minutes
     }
     
     def get_next_poll_time(self, stage: str, current_attempt: int) -> Optional[datetime]:
@@ -324,16 +347,21 @@ def capture_metrics(x_post_id: str, stage: str = "fast"):
 class XAPIClient:
     """Client for X/Twitter API interactions."""
     
-    def __init__(self, access_token: str):
+    def __init__(self, access_token: str, base_url: str = "https://api.x.com/2", dry_run: bool = False):
         self.access_token = access_token
+        self.dry_run = dry_run
         self.client = httpx.AsyncClient(
-            base_url="https://api.x.com/2",
+            base_url=base_url,
             headers={"Authorization": f"Bearer {access_token}"},
             timeout=30.0
         )
     
     async def create_post(self, text: str, media_ids: List[str] = None):
         """Create a post on X."""
+        if self.dry_run:
+            logger.info(f"[DRY RUN] Would create post: {text[:50]}...")
+            return {"data": {"id": "dry_run_123", "text": text}}
+        
         payload = {"text": text}
         if media_ids:
             payload["media"] = {"media_ids": media_ids}
@@ -344,6 +372,10 @@ class XAPIClient:
     
     async def get_metrics(self, tweet_id: str):
         """Get metrics for a tweet."""
+        if self.dry_run:
+            logger.info(f"[DRY RUN] Would fetch metrics for {tweet_id}")
+            return {"data": {}}
+        
         response = await self.client.get(
             f"/tweets/{tweet_id}",
             params={"tweet.fields": "public_metrics,non_public_metrics"}
@@ -400,6 +432,31 @@ def health_check():
     # Report worker status
 ```
 
+#### 11.4 Correlation IDs for Observability
+```python
+import structlog
+from celery import Task
+
+class CustomTask(Task):
+    """Celery task with automatic correlation IDs."""
+    
+    def __call__(self, *args, **kwargs):
+        # Extract correlation IDs from task context
+        task_id = self.request.id
+        dedupe_key = kwargs.get('dedupe_key')
+        job_id = kwargs.get('job_id')
+        
+        # Bind to logger for all log entries in this task
+        structlog.contextvars.clear_contextvars()
+        structlog.contextvars.bind_contextvars(
+            task_id=task_id,
+            dedupe_key=dedupe_key,
+            job_id=job_id
+        )
+        
+        return super().__call__(*args, **kwargs)
+```
+
 ### Phase 12: Deployment & Configuration
 
 #### 12.1 Environment Configuration
@@ -409,12 +466,20 @@ ENVIRONMENT=dev
 X_API_TIER=free
 DRY_RUN=true
 LOG_LEVEL=DEBUG
+X_API_BASE_URL=https://api.x.com/2
+X_CLIENT_ID=your_dev_client_id
+X_CLIENT_SECRET=your_dev_secret
+X_REDIRECT_URI=http://localhost:8000/auth/callback
 
 # .env.prod  
 ENVIRONMENT=prod
 X_API_TIER=pro
 DRY_RUN=false
 LOG_LEVEL=INFO
+X_API_BASE_URL=https://api.x.com/2
+X_CLIENT_ID=your_prod_client_id
+X_CLIENT_SECRET=your_prod_secret
+X_REDIRECT_URI=https://yourdomain.com/auth/callback
 ```
 
 #### 12.2 Docker Compose Updates
@@ -422,23 +487,32 @@ LOG_LEVEL=INFO
 # Add Celery worker services
 worker-publish:
   build: .
-  command: celery -A src.celery_app worker --loglevel=info --queues=publish
+  command: celery -A src.celery_app worker --loglevel=info --queues=publish --concurrency=2
   depends_on: [redis, db]
+  environment:
+    - DATABASE_URL=${DATABASE_URL}
+    - REDIS_URL=${REDIS_URL}
+    - X_CLIENT_ID=${X_CLIENT_ID}
+    - X_CLIENT_SECRET=${X_CLIENT_SECRET}
+    - DRY_RUN=${DRY_RUN}
 
 worker-metrics:
   build: .
-  command: celery -A src.celery_app worker --loglevel=info --queues=metrics
+  command: celery -A src.celery_app worker --loglevel=info --queues=metrics --concurrency=2
   depends_on: [redis, db]
-
-worker-scheduler:
-  build: .
-  command: celery -A src.celery_app worker --loglevel=info --queues=scheduler
-  depends_on: [redis, db]
+  environment:
+    - DATABASE_URL=${DATABASE_URL}
+    - REDIS_URL=${REDIS_URL}
+    - X_CLIENT_ID=${X_CLIENT_ID}
+    - X_CLIENT_SECRET=${X_CLIENT_SECRET}
 
 beat:
   build: .
   command: celery -A src.celery_app beat --loglevel=info
   depends_on: [redis, db]
+  environment:
+    - DATABASE_URL=${DATABASE_URL}
+    - REDIS_URL=${REDIS_URL}
 ```
 
 #### 12.3 Monitoring Setup
@@ -489,6 +563,24 @@ grafana:
 - [ ] Add comprehensive testing
 - [ ] Deploy and validate
 
+## Security & Compliance
+
+### Token Security
+- **Encryption at rest**: Store X API tokens encrypted (use Fernet or KMS-backed encryption)
+- **Token rotation**: Implement automatic refresh token rotation before expiry
+- **Scope minimization**: Request only necessary OAuth scopes (tweet.read, tweet.write)
+- **Per-environment secrets**: Use separate X API apps for dev/prod environments
+
+### Logging & PII
+- **Strict log filtering**: Never log access tokens, full post content, or PII
+- **Sanitize audit logs**: Hash sensitive data before logging
+- **Request/response sanitization**: Strip tokens from error messages
+
+### API Security
+- **Rate limit headers**: Monitor X API rate limit headers and backoff appropriately
+- **Request signing**: Validate all incoming webhook signatures from X
+- **CORS**: Configure strict CORS policies for API endpoints
+
 ## Testing Strategy
 
 ### Unit Tests
@@ -504,10 +596,16 @@ grafana:
 - Error handling and recovery
 
 ### Load Tests
-- Concurrent job processing
-- Rate limit handling
-- Queue performance under load
-- Database connection pooling
+- Concurrent job processing (100+ jobs/minute)
+- Rate limit handling (verify rate_limit enforcement)
+- Queue performance under load (measure Redis throughput)
+- Database connection pooling (verify pool exhaustion doesn't occur)
+
+### Resilience Tests
+- **Redis failure**: Kill Redis mid-task and verify graceful failure/retry
+- **Database lock contention**: Simulate concurrent updates to same job row
+- **X API downtime**: Mock API failures and verify backoff strategy
+- **Worker crash recovery**: Kill worker mid-task and verify task retry
 
 ## Migration Strategy
 
