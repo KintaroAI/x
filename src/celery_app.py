@@ -50,4 +50,5 @@ app.conf.beat_schedule = {
 
 # Import tasks here so they're registered
 # Tasks will be imported in later iterations
+from src.tasks import publish
 

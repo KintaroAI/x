@@ -6,6 +6,7 @@ from sqlalchemy.orm import sessionmaker, Session
 from contextlib import contextmanager
 
 from src.models import Base
+from src.utils.redis_utils import get_redis_client, test_redis_connection
 
 
 def get_database_url() -> str:
@@ -47,4 +48,30 @@ def init_db():
     """Initialize database tables."""
     engine = get_engine()
     Base.metadata.create_all(bind=engine)
+
+
+def test_connections() -> dict:
+    """Test database and Redis connections."""
+    results = {
+        "database": False,
+        "redis": False,
+        "errors": []
+    }
+    
+    # Test database
+    try:
+        engine = get_engine()
+        with engine.connect() as conn:
+            conn.execute("SELECT 1")
+        results["database"] = True
+    except Exception as e:
+        results["errors"].append(f"Database: {str(e)}")
+    
+    # Test Redis
+    try:
+        results["redis"] = test_redis_connection()
+    except Exception as e:
+        results["errors"].append(f"Redis: {str(e)}")
+    
+    return results
 
