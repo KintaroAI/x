@@ -21,6 +21,24 @@ This document outlines the implementation plan for transitioning from the curren
 - **Error Handling**: Basic retry logic missing
 - **Metrics Collection**: Not automated
 
+## Implementation Status
+
+### ✅ Already Fixed in This Document
+- **Redis Lock API**: Correctly uses `redis_client.set(key, "1", nx=True, ex=...)` (see §5.1)
+- **Status Enum**: Includes `cancelled` in database schema to match state machine (see §1.1)
+- **Queue Routing**: Routes `scheduler.tick` and `process_dead_letter` properly (see §2.2)
+- **Metrics Polling Units**: All times normalized to minutes (see §9.1)
+- **Beat Schedule**: Properly configured with `app.conf.beat_schedule` (see §4.3)
+- **Dead-letter Naming**: Consistent `process_dead_letter` throughout (see §7.2)
+- **Results Backend**: `task_ignore_result=True` set to reduce Redis churn (see §2.2)
+- **API Client**: Environment-driven configuration with `X_API_BASE_URL` and `X_TWEET_FIELDS` (see §10.1)
+
+### 📝 Additional Notes for Implementation
+- **Task Routes**: Use task names (like `"scheduler.tick"`) not module paths in `task_routes`
+- **Rate Limits**: Set in task decorator OR `task_annotations`, not in `task_routes`
+- **Early-exit Idempotency**: Check if job is already terminal before processing (see §3.1 comment)
+- **SELECT FOR UPDATE SKIP LOCKED**: Use in scheduler to safely shard across multiple schedulers (see §4.2 comment)
+
 ## Implementation Plan
 
 ### Phase 1: Database Schema Updates
@@ -96,13 +114,15 @@ app.conf.task_routes = {
     "src.tasks.publish_post": {"queue": "publish"},
     "src.tasks.capture_metrics": {"queue": "metrics"},
     "src.tasks.prepare_media": {"queue": "media"},
-    "src.tasks.scheduler_tick": {"queue": "scheduler"},
-    "src.tasks.process_dead_letter": {"queue": "dlq"},
+    "scheduler.tick": {"queue": "scheduler"},  # Note: uses task name, not module path
+    "process_dead_letter": {"queue": "dlq"},
 }
 
 # Optional: ignore results to reduce Redis churn
 app.conf.task_ignore_result = True
 ```
+
+**Note:** For celery beat tasks like `scheduler.tick`, route using the task name (e.g., `"scheduler.tick"`), not the module path. The beat schedule will still trigger it properly.
 
 ### Phase 3: Task Definitions
 
@@ -304,7 +324,12 @@ app.conf.task_annotations = {
         "rate_limit": RATE_LIMITS[API_TIER]
     }
 }
+
+# Alternative: Set rate_limit in task decorator directly
+# @app.task(rate_limit=RATE_LIMITS[API_TIER], ...)
 ```
+
+**Important:** Rate limits should be set in the task decorator OR in `task_annotations`, not in `task_routes`. The example above shows both approaches.
 
 ### Phase 9: Metrics Collection
 
@@ -344,14 +369,20 @@ def capture_metrics(x_post_id: str, stage: str = "fast"):
 
 #### 10.1 X API Client
 ```python
+import os
+
 class XAPIClient:
     """Client for X/Twitter API interactions."""
     
-    def __init__(self, access_token: str, base_url: str = "https://api.x.com/2", dry_run: bool = False):
+    def __init__(self, access_token: str, base_url: str = None, dry_run: bool = False):
         self.access_token = access_token
         self.dry_run = dry_run
+        # Use env var or default
+        self.base_url = base_url or os.getenv("X_API_BASE_URL", "https://api.x.com/2")
+        self.tweet_fields = os.getenv("X_TWEET_FIELDS", "public_metrics,non_public_metrics")
+        
         self.client = httpx.AsyncClient(
-            base_url=base_url,
+            base_url=self.base_url,
             headers={"Authorization": f"Bearer {access_token}"},
             timeout=30.0
         )
@@ -378,11 +409,16 @@ class XAPIClient:
         
         response = await self.client.get(
             f"/tweets/{tweet_id}",
-            params={"tweet.fields": "public_metrics,non_public_metrics"}
+            params={"tweet.fields": self.tweet_fields}
         )
         response.raise_for_status()
         return response.json()
 ```
+
+**Configuration via environment variables:**
+- `X_API_BASE_URL` - Base URL for X API (defaults to v2)
+- `X_TWEET_FIELDS` - Comma-separated fields to request for tweet metrics
+- `DRY_RUN` - Set to `true` to mock API calls without making real requests
 
 ### Phase 11: Observability & Monitoring
 
