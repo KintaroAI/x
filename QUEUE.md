@@ -23,21 +23,22 @@ This document outlines the implementation plan for transitioning from the curren
 
 ## Implementation Status
 
-### ✅ Already Fixed in This Document
-- **Redis Lock API**: Correctly uses `redis_client.set(key, "1", nx=True, ex=...)` (see §5.1)
-- **Status Enum**: Includes `cancelled` in database schema to match state machine (see §1.1)
-- **Queue Routing**: Routes `scheduler.tick` and `process_dead_letter` properly (see §2.2)
-- **Metrics Polling Units**: All times normalized to minutes (see §9.1)
-- **Beat Schedule**: Properly configured with `app.conf.beat_schedule` (see §4.3)
-- **Dead-letter Naming**: Consistent `process_dead_letter` throughout (see §7.2)
-- **Results Backend**: `task_ignore_result=True` set to reduce Redis churn (see §2.2)
-- **API Client**: Environment-driven configuration with `X_API_BASE_URL` and `X_TWEET_FIELDS` (see §10.1)
+### ✅ Critical Issues Fixed
+1. **Redis Lock API**: Uses `set(key, "1", nx=True, ex=172800)` - NOT `setnx()` (§5.1)
+2. **Status Enum**: Includes `cancelled` in both database schema and state machine (§1.1, §6.1)
+3. **Queue Routing**: Routes using task names not module paths (§2.2)
+4. **Beat Schedule**: Properly registered with descriptive key (§4.3)
+5. **Rate Limits**: Set in task decorator, NOT in `task_routes` (§3.1, §8.2)
+6. **Metrics Polling**: All times normalized to minutes (§9.1)
+7. **DLQ Naming**: Consistent `process_dead_letter` throughout (§2.2, §7.2)
+8. **Timestamps**: `enqueued_at`, `started_at`, `finished_at` present for SLOs (§1.1)
+9. **Result Backend**: `task_ignore_result=True` to reduce Redis churn (§2.2)
+10. **X API Config**: Environment-driven with `X_API_BASE_URL` and `X_TWEET_FIELDS` (§10.1)
 
-### 📝 Additional Notes for Implementation
-- **Task Routes**: Use task names (like `"scheduler.tick"`) not module paths in `task_routes`
-- **Rate Limits**: Set in task decorator OR `task_annotations`, not in `task_routes`
-- **Early-exit Idempotency**: Check if job is already terminal before processing (see §3.1 comment)
-- **SELECT FOR UPDATE SKIP LOCKED**: Use in scheduler to safely shard across multiple schedulers (see §4.2 comment)
+### 🎯 Best Practices Implemented
+- **Early-exit Idempotency**: Terminal state check in `publish_post()` (§3.1)
+- **SELECT FOR UPDATE SKIP LOCKED**: Safe multi-scheduler sharding (§4.2)
+- **Task Name Routing**: Uses names like `"scheduler.tick"` not module paths (§2.2)
 
 ## Implementation Plan
 
@@ -111,18 +112,18 @@ app.conf.update(
 ```python
 # Define queues
 app.conf.task_routes = {
-    "src.tasks.publish_post": {"queue": "publish"},
-    "src.tasks.capture_metrics": {"queue": "metrics"},
-    "src.tasks.prepare_media": {"queue": "media"},
-    "scheduler.tick": {"queue": "scheduler"},  # Note: uses task name, not module path
+    "publish.post": {"queue": "publish"},
+    "metrics.capture": {"queue": "metrics"},
+    "media.prepare": {"queue": "media"},
+    "scheduler.tick": {"queue": "scheduler"},  # Beat scheduler tick
     "process_dead_letter": {"queue": "dlq"},
 }
 
-# Optional: ignore results to reduce Redis churn
+# Ignore results to reduce Redis churn (results not needed)
 app.conf.task_ignore_result = True
 ```
 
-**Note:** For celery beat tasks like `scheduler.tick`, route using the task name (e.g., `"scheduler.tick"`), not the module path. The beat schedule will still trigger it properly.
+**Note:** Use task names (like `"scheduler.tick"`) not module paths in `task_routes`. Rate limits should be set in task decorators or `task_annotations`, NOT in `task_routes`.
 
 ### Phase 3: Task Definitions
 
@@ -141,8 +142,14 @@ app.conf.task_ignore_result = True
 )
 def publish_post(job_id: str):
     """Publish a post to X/Twitter."""
+    # CRITICAL: Early-exit idempotency check
+    # If job is already in terminal state (succeeded/failed/dead_letter/cancelled),
+    # skip processing to make retries harmless
+    job = get_publish_job(job_id)
+    if job and job.status in ["succeeded", "failed", "dead_letter", "cancelled"]:
+        return {"status": "already_completed", "result": job.status}
+    
     # Implementation details below
-    # Include early-exit if job already terminal (idempotency)
 ```
 
 #### 3.2 Metrics Capture Task
@@ -194,11 +201,17 @@ class ScheduleResolver:
 @app.task(name="scheduler.tick")
 def scheduler_tick():
     """Main scheduler loop - runs every minute via Celery Beat."""
-    # Use SELECT ... FOR UPDATE SKIP LOCKED for safe sharding
-    # Find due schedules
-    # Create publish_jobs
-    # Enqueue tasks with ETA
-    # Update next_run_at
+    # IMPORTANT: Use SELECT ... FOR UPDATE SKIP LOCKED for safe multi-scheduler sharding
+    # This allows multiple scheduler instances to safely share work without conflicts
+    due_schedules = db.query(Schedule).filter(
+        Schedule.next_run_at <= datetime.utcnow(),
+        Schedule.active == True
+    ).with_for_update(skip_locked=True).all()
+    
+    for schedule in due_schedules:
+        # Create publish_jobs
+        # Enqueue tasks with ETA
+        # Update next_run_at
 ```
 
 #### 4.3 Periodic Scheduler Beat
@@ -206,8 +219,9 @@ def scheduler_tick():
 # Register in celery_app.py
 from celery.schedules import crontab
 
+# Beat schedule runs every minute
 app.conf.beat_schedule = {
-    "scheduler-tick": {
+    "scheduler-tick-every-60s": {
         "task": "scheduler.tick",
         "schedule": crontab(minute="*"),  # Every minute
     },
@@ -318,7 +332,7 @@ RATE_LIMITS = {
 
 #### 8.2 Celery Rate Limiting
 ```python
-# Apply rate limits via task_annotations (rate limits not supported in task_routes)
+# Apply rate limits via task_annotations
 app.conf.task_annotations = {
     "publish.post": {
         "rate_limit": RATE_LIMITS[API_TIER]
@@ -326,10 +340,10 @@ app.conf.task_annotations = {
 }
 
 # Alternative: Set rate_limit in task decorator directly
-# @app.task(rate_limit=RATE_LIMITS[API_TIER], ...)
+# @app.task(name="publish.post", rate_limit=RATE_LIMITS[API_TIER], ...)
 ```
 
-**Important:** Rate limits should be set in the task decorator OR in `task_annotations`, not in `task_routes`. The example above shows both approaches.
+**CRITICAL:** Rate limits MUST be set in the task decorator OR in `task_annotations`. DO NOT put `rate_limit` in `task_routes` - Celery ignores it there.
 
 ### Phase 9: Metrics Collection
 
@@ -503,6 +517,7 @@ X_API_TIER=free
 DRY_RUN=true
 LOG_LEVEL=DEBUG
 X_API_BASE_URL=https://api.x.com/2
+X_TWEET_FIELDS=public_metrics,non_public_metrics
 X_CLIENT_ID=your_dev_client_id
 X_CLIENT_SECRET=your_dev_secret
 X_REDIRECT_URI=http://localhost:8000/auth/callback
@@ -513,6 +528,7 @@ X_API_TIER=pro
 DRY_RUN=false
 LOG_LEVEL=INFO
 X_API_BASE_URL=https://api.x.com/2
+X_TWEET_FIELDS=public_metrics,non_public_metrics
 X_CLIENT_ID=your_prod_client_id
 X_CLIENT_SECRET=your_prod_secret
 X_REDIRECT_URI=https://yourdomain.com/auth/callback
@@ -528,6 +544,8 @@ worker-publish:
   environment:
     - DATABASE_URL=${DATABASE_URL}
     - REDIS_URL=${REDIS_URL}
+    - X_API_BASE_URL=${X_API_BASE_URL}
+    - X_TWEET_FIELDS=${X_TWEET_FIELDS}
     - X_CLIENT_ID=${X_CLIENT_ID}
     - X_CLIENT_SECRET=${X_CLIENT_SECRET}
     - DRY_RUN=${DRY_RUN}
@@ -539,8 +557,18 @@ worker-metrics:
   environment:
     - DATABASE_URL=${DATABASE_URL}
     - REDIS_URL=${REDIS_URL}
+    - X_API_BASE_URL=${X_API_BASE_URL}
+    - X_TWEET_FIELDS=${X_TWEET_FIELDS}
     - X_CLIENT_ID=${X_CLIENT_ID}
     - X_CLIENT_SECRET=${X_CLIENT_SECRET}
+
+worker-scheduler:
+  build: .
+  command: celery -A src.celery_app worker --loglevel=info --queues=scheduler --concurrency=1
+  depends_on: [redis, db]
+  environment:
+    - DATABASE_URL=${DATABASE_URL}
+    - REDIS_URL=${REDIS_URL}
 
 beat:
   build: .
