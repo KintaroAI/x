@@ -191,6 +191,15 @@ def scheduler_health_check():
             
             logger.info(f"Health check: {overdue_schedules} overdue schedules, {stuck_jobs} stuck jobs")
             
+            # Automatically cleanup orphaned jobs (stuck in 'enqueued' for > 5 minutes)
+            from src.utils.job_cleanup import cleanup_orphaned_jobs
+            cleanup_stats = cleanup_orphaned_jobs(timeout_minutes=5)
+            if cleanup_stats["found"] > 0:
+                logger.info(
+                    f"Health check cleanup: re-enqueued {cleanup_stats['re_enqueued']} "
+                    f"orphaned jobs ({cleanup_stats['failed']} failed)"
+                )
+            
             # TODO: Add alerting if thresholds are exceeded
             if overdue_schedules > 10:
                 logger.warning(f"High number of overdue schedules: {overdue_schedules}")

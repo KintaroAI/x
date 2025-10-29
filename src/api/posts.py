@@ -471,9 +471,28 @@ async def instant_publish(post_id: int):
             db.flush()  # Get job.id without committing yet
             
             # Immediately enqueue to Celery and update status to "enqueued"
-            publish_post.apply_async(kwargs={"job_id": str(publish_job.id)})
-            publish_job.status = PublishJobStatus.ENQUEUED.value
-            publish_job.enqueued_at = datetime.utcnow()
+            # If enqueuing fails, we'll keep status as "planned" so it can be picked up by cleanup
+            try:
+                publish_post.apply_async(kwargs={"job_id": str(publish_job.id)})
+                publish_job.status = PublishJobStatus.ENQUEUED.value
+                publish_job.enqueued_at = datetime.utcnow()
+                logger.info(f"Successfully enqueued job {publish_job.id} to Celery")
+            except Exception as e:
+                # If enqueuing fails (e.g., Celery not running), keep status as "planned"
+                # The job will be picked up by the cleanup mechanism or can be manually re-enqueued
+                logger.error(f"Failed to enqueue job {publish_job.id} to Celery: {str(e)}", exc_info=True)
+                # Keep status as "planned" - cleanup can pick it up later
+                # Don't update enqueued_at
+                log_error(
+                    action="instant_publish_enqueue_failed",
+                    message=f"Failed to enqueue job {publish_job.id} to Celery",
+                    component="api",
+                    extra_data=json.dumps({
+                        "post_id": post_id,
+                        "job_id": publish_job.id,
+                        "error": str(e)
+                    })
+                )
             
             db.commit()
             db.refresh(publish_job)

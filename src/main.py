@@ -147,6 +147,13 @@ async def get_post(post_id: int):
     return await posts.get_post(post_id)
 
 
+@app.post("/api/jobs/cleanup-orphaned")
+async def cleanup_orphaned_jobs_api():
+    """Cleanup and re-enqueue orphaned jobs stuck in 'enqueued' state."""
+    from src.utils.job_cleanup import cleanup_orphaned_jobs
+    return cleanup_orphaned_jobs(timeout_minutes=5)
+
+
 def main():
     """Main function."""
     import uvicorn
