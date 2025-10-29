@@ -1,7 +1,7 @@
 """Celery tasks for scheduler automation."""
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List
 
 from src.celery_app import app

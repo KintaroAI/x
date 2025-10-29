@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy dependency files
-COPY requirements.txt pyproject.toml README.md LICENSE ./
+COPY requirements.txt pyproject.toml README.md LICENSE pytest.ini ./
 
 # Copy source code
 COPY src/ ./src/

@@ -1,4 +1,4 @@
-.PHONY: help dev prod up down logs logs-api clean migrate init-db migrate-create migrate-create-simple shell-db update-db build-api
+.PHONY: help dev prod up down logs logs-api clean migrate init-db migrate-create migrate-create-simple shell-db update-db build-api test test-unit test-integration test-scheduler test-coverage shell-api shell-worker
 
 help:
 	@echo "Available commands:"
@@ -16,6 +16,15 @@ help:
 	@echo "  make migrate-create  - Create a new migration (interactive)"
 	@echo "  make migrate-create-simple MSG='msg' - Create migration with message"
 	@echo "  make shell-db        - Open PostgreSQL shell"
+	@echo "  make shell-api       - Open shell in API container"
+	@echo "  make shell-worker    - Open shell in worker container"
+	@echo ""
+	@echo "Testing commands:"
+	@echo "  make test            - Run all tests"
+	@echo "  make test-unit       - Run unit tests only"
+	@echo "  make test-integration - Run integration tests only"
+	@echo "  make test-scheduler  - Run scheduler tests only"
+	@echo "  make test-coverage   - Run tests with coverage report"
 
 dev:
 	@echo "Starting development environment..."
@@ -90,3 +99,33 @@ build-api:
 	docker compose build api
 	docker compose up -d --force-recreate api
 	@echo "API container rebuilt and restarted!"
+
+# Testing commands
+test:
+	@echo "Running all tests..."
+	docker compose exec api pytest tests/ -v
+
+test-unit:
+	@echo "Running unit tests..."
+	docker compose exec api pytest tests/ -v -m "unit"
+
+test-integration:
+	@echo "Running integration tests..."
+	docker compose exec api pytest tests/ -v -m "integration"
+
+test-scheduler:
+	@echo "Running scheduler tests..."
+	docker compose exec api pytest tests/test_scheduler*.py -v
+
+test-coverage:
+	@echo "Running tests with coverage..."
+	docker compose exec api pytest tests/ --cov=src --cov-report=html --cov-report=term
+
+# Shell access commands
+shell-api:
+	@echo "Opening shell in API container..."
+	docker compose exec api bash
+
+shell-worker:
+	@echo "Opening shell in worker container..."
+	docker compose exec worker bash
