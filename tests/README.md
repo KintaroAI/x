@@ -13,10 +13,23 @@ make dev
 ### Available Test Commands
 
 - `make test` - Run all tests
-- `make test-unit` - Run unit tests only
-- `make test-integration` - Run integration tests only  
-- `make test-scheduler` - Run scheduler tests only
-- `make test-coverage` - Run tests with coverage report
+- `make coverage` - Run tests with coverage report
+
+### Advanced Test Commands
+
+For more specific testing, you can also use pytest directly:
+
+```bash
+# Run specific test file
+docker compose exec api pytest tests/test_scheduler_service.py -v
+
+# Run specific test method
+docker compose exec api pytest tests/test_scheduler_service.py::TestScheduleResolver::test_resolve_one_shot_future -v
+
+# Run tests by marker
+docker compose exec api pytest tests/ -v -m "unit"
+docker compose exec api pytest tests/ -v -m "integration"
+```
 
 ### Test Structure
 

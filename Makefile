@@ -1,4 +1,4 @@
-.PHONY: help dev prod up down logs logs-api clean migrate init-db migrate-create migrate-create-simple shell-db update-db build-api test test-unit test-integration test-scheduler test-coverage shell-api shell-worker
+.PHONY: help dev prod up down logs logs-api clean migrate init-db migrate-create migrate-create-simple shell-db update-db build-api test coverage shell-api shell-worker
 
 help:
 	@echo "Available commands:"
@@ -21,10 +21,7 @@ help:
 	@echo ""
 	@echo "Testing commands:"
 	@echo "  make test            - Run all tests"
-	@echo "  make test-unit       - Run unit tests only"
-	@echo "  make test-integration - Run integration tests only"
-	@echo "  make test-scheduler  - Run scheduler tests only"
-	@echo "  make test-coverage   - Run tests with coverage report"
+	@echo "  make coverage        - Run tests with coverage report"
 
 dev:
 	@echo "Starting development environment..."
@@ -105,19 +102,7 @@ test:
 	@echo "Running all tests..."
 	docker compose exec api pytest tests/ -v
 
-test-unit:
-	@echo "Running unit tests..."
-	docker compose exec api pytest tests/ -v -m "unit"
-
-test-integration:
-	@echo "Running integration tests..."
-	docker compose exec api pytest tests/ -v -m "integration"
-
-test-scheduler:
-	@echo "Running scheduler tests..."
-	docker compose exec api pytest tests/test_scheduler*.py -v
-
-test-coverage:
+coverage:
 	@echo "Running tests with coverage..."
 	docker compose exec api pytest tests/ --cov=src --cov-report=html --cov-report=term
 
