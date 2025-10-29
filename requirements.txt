@@ -22,6 +22,8 @@ flower>=2.0.0
 
 # Schedule parsing
 python-dateutil>=2.8.0
+croniter>=1.4.0
+pytz>=2023.3
 
 # Redis
 redis>=5.0.0
