@@ -436,34 +436,29 @@ async def instant_publish(post_id: int):
                 db.refresh(schedule)
                 logger.info(f"Created new schedule for post {post_id}")
             
-            # Check if there's already a publish job within the last 30 minutes
-            now = datetime.utcnow()
-            thirty_minutes_ago = now - timedelta(minutes=30)
+            # Block if ANY non-terminal job exists for this schedule (no time window)
+            terminal_states = {"cancelled", "succeeded", "failed", "dead_letter"}
+            existing_active_job = (
+                db.query(PublishJob)
+                .filter(
+                    PublishJob.schedule_id == schedule.id,
+                    ~PublishJob.status.in_(terminal_states)
+                )
+                .order_by(PublishJob.planned_at.desc())
+                .first()
+            )
             
-            recent_jobs = db.query(PublishJob).filter(
-                PublishJob.schedule_id == schedule.id,
-                PublishJob.planned_at >= thirty_minutes_ago
-            ).order_by(PublishJob.planned_at.desc()).all()
-            
-            if recent_jobs:
-                # Check if all recent jobs are in terminal states (cancelled, succeeded, failed, dead_letter)
-                terminal_states = {"cancelled", "succeeded", "failed", "dead_letter"}
-                non_terminal_jobs = [job for job in recent_jobs if job.status not in terminal_states]
-                
-                if non_terminal_jobs:
-                    # There are non-terminal jobs - block publishing
-                    most_recent_job = recent_jobs[0]
-                    logger.info(f"Publish job already exists for post {post_id}, status: {most_recent_job.status}")
-                    return {
-                        "message": f"Job already planned. Status: {most_recent_job.status}",
-                        "job_id": most_recent_job.id,
-                        "status": most_recent_job.status,
-                        "planned_at": most_recent_job.planned_at.isoformat(),
-                        "already_exists": True
-                    }
-                else:
-                    # All recent jobs are terminal - allow publishing
-                    logger.info(f"All recent jobs are terminal for post {post_id}, allowing new publish")
+            if existing_active_job:
+                logger.info(
+                    f"Active publish job already exists for post {post_id}, status: {existing_active_job.status}"
+                )
+                return {
+                    "message": f"Job already planned. Status: {existing_active_job.status}",
+                    "job_id": existing_active_job.id,
+                    "status": existing_active_job.status,
+                    "planned_at": existing_active_job.planned_at.isoformat(),
+                    "already_exists": True
+                }
             
             # Create a new instant publish job with status "planned"
             publish_job = PublishJob(
