@@ -283,31 +283,36 @@ async def delete_post(post_id: int):
             post.deleted = True
             post.updated_at = datetime.utcnow()
             
-            # Cancel all pending jobs related to this post
+            # Cancel all non-terminal jobs related to this post
             schedules = db.query(Schedule).filter(Schedule.post_id == post_id).all()
             cancelled_count = 0
             
+            # Terminal states are: succeeded, failed, cancelled, dead_letter
+            terminal_states = {"succeeded", "failed", "cancelled", "dead_letter"}
+            
             for schedule in schedules:
-                # Update all pending publish jobs to cancelled
-                pending_jobs = db.query(PublishJob).filter(
+                # Update all non-terminal publish jobs to cancelled
+                # Only cancel jobs that are: planned, enqueued, or running
+                cancellable_jobs = db.query(PublishJob).filter(
                     PublishJob.schedule_id == schedule.id,
-                    PublishJob.status == "pending"
+                    ~PublishJob.status.in_(terminal_states)
                 ).all()
                 
-                for job in pending_jobs:
+                for job in cancellable_jobs:
                     job.status = "cancelled"
                     job.updated_at = datetime.utcnow()
+                    job.finished_at = datetime.utcnow()
                     cancelled_count += 1
                     logger.info(f"Cancelled publish job {job.id} for deleted post {post_id}")
             
             db.commit()
             
             extra_data = {"post_id": post_id, "cancelled_jobs": cancelled_count}
-            logger.info(f"Soft deleted post with id: {post_id}, cancelled {cancelled_count} pending jobs")
+            logger.info(f"Soft deleted post with id: {post_id}, cancelled {cancelled_count} active jobs")
             
             log_info(
                 action="post_deleted",
-                message=f"Soft deleted post with id {post_id}, cancelled {cancelled_count} pending jobs",
+                message=f"Soft deleted post with id {post_id}, cancelled {cancelled_count} active jobs",
                 component="api",
                 extra_data=json.dumps(extra_data)
             )
@@ -388,11 +393,13 @@ async def restore_post(post_id: int):
 
 
 async def instant_publish(post_id: int):
-    """Create an instant publish job for a post."""
+    """Create an instant publish job for a post and enqueue it immediately."""
     try:
         logger.debug(f"instant_publish called with post_id: {post_id}")
         
         from src.models import Schedule, PublishJob
+        from src.tasks.publish import publish_post
+        from src.utils.state_machine import PublishJobStatus
         
         with get_db() as db:
             # Get the post
@@ -439,11 +446,12 @@ async def instant_publish(post_id: int):
             ).order_by(PublishJob.planned_at.desc()).all()
             
             if recent_jobs:
-                # Check if all recent jobs are cancelled
-                non_cancelled_jobs = [job for job in recent_jobs if job.status != "cancelled"]
+                # Check if all recent jobs are in terminal states (cancelled, succeeded, failed, dead_letter)
+                terminal_states = {"cancelled", "succeeded", "failed", "dead_letter"}
+                non_terminal_jobs = [job for job in recent_jobs if job.status not in terminal_states]
                 
-                if non_cancelled_jobs:
-                    # There are non-cancelled jobs - block publishing
+                if non_terminal_jobs:
+                    # There are non-terminal jobs - block publishing
                     most_recent_job = recent_jobs[0]
                     logger.info(f"Publish job already exists for post {post_id}, status: {most_recent_job.status}")
                     return {
@@ -454,34 +462,42 @@ async def instant_publish(post_id: int):
                         "already_exists": True
                     }
                 else:
-                    # All recent jobs are cancelled - allow publishing
-                    logger.info(f"All recent jobs are cancelled for post {post_id}, allowing new publish")
+                    # All recent jobs are terminal - allow publishing
+                    logger.info(f"All recent jobs are terminal for post {post_id}, allowing new publish")
             
-            # Create a new instant publish job
+            # Create a new instant publish job with status "planned"
             publish_job = PublishJob(
                 schedule_id=schedule.id,
                 planned_at=datetime.utcnow(),
-                status="pending",
+                status=PublishJobStatus.PLANNED.value,  # Use correct status from state machine
                 dedupe_key=f"{schedule.id}_{datetime.utcnow().isoformat()}"
             )
             db.add(publish_job)
+            db.flush()  # Get job.id without committing yet
+            
+            # Immediately enqueue to Celery and update status to "enqueued"
+            publish_post.apply_async(kwargs={"job_id": str(publish_job.id)})
+            publish_job.status = PublishJobStatus.ENQUEUED.value
+            publish_job.enqueued_at = datetime.utcnow()
+            
             db.commit()
             db.refresh(publish_job)
             
-            logger.info(f"Created instant publish job {publish_job.id} for post {post_id}")
+            logger.info(f"Created and enqueued instant publish job {publish_job.id} for post {post_id}")
             log_info(
                 action="instant_publish_job_created",
-                message=f"Created instant publish job {publish_job.id} for post {post_id}",
+                message=f"Created and enqueued instant publish job {publish_job.id} for post {post_id}",
                 component="api",
                 extra_data=json.dumps({
                     "post_id": post_id,
                     "job_id": publish_job.id,
-                    "schedule_id": schedule.id
+                    "schedule_id": schedule.id,
+                    "status": publish_job.status
                 })
             )
             
             return {
-                "message": "Publish job created successfully",
+                "message": "Publish job created and enqueued successfully",
                 "job_id": publish_job.id,
                 "status": publish_job.status,
                 "planned_at": publish_job.planned_at.isoformat(),
