@@ -11,6 +11,13 @@ from src.database import get_db
 from src.models import PublishJob, Schedule, Post, PublishedPost
 from src.api.twitter import create_twitter_post
 from src.utils.redis_utils import acquire_dedupe_lock, release_dedupe_lock
+from src.utils.state_machine import (
+    update_job_status, 
+    is_job_terminal, 
+    get_job_status,
+    PublishJobStatus,
+    PublishJobStateMachine
+)
 
 logger = logging.getLogger(__name__)
 
@@ -29,28 +36,31 @@ def publish_post(job_id: str):
     """Publish a post to X/Twitter."""
     logger.info(f"Starting publish job {job_id}")
     
-    # CRITICAL: Early-exit idempotency check
-    # If job is already in terminal state (succeeded/failed/dead_letter/cancelled),
-    # skip processing to make retries harmless
-    with get_db() as db:
-        job = db.query(PublishJob).filter(PublishJob.id == job_id).first()
+    # CRITICAL: Early-exit idempotency check using state machine
+    # If job is already in terminal state, skip processing to make retries harmless
+    if is_job_terminal(int(job_id)):
+        current_status = get_job_status(int(job_id))
+        logger.info(f"Job {job_id} already completed with status: {current_status}")
+        return {"status": "already_completed", "result": current_status}
+    
+    try:
+        # Get the job first to access its attempt count
+        with get_db() as db:
+            job = db.query(PublishJob).filter(PublishJob.id == int(job_id)).first()
+            if not job:
+                logger.error(f"Job {job_id} not found")
+                return {"status": "error", "message": "Job not found"}
         
-        if not job:
-            logger.error(f"Job {job_id} not found")
-            return {"status": "error", "message": "Job not found"}
+        # Transition to running state atomically
+        job = update_job_status(
+            int(job_id), 
+            PublishJobStatus.RUNNING.value,
+            started_at=datetime.utcnow(),
+            attempt=job.attempt + 1
+        )
         
-        if job.status in ["succeeded", "failed", "dead_letter", "cancelled"]:
-            logger.info(f"Job {job_id} already completed with status: {job.status}")
-            return {"status": "already_completed", "result": job.status}
-        
-        # Update job status to running
-        job.status = "running"
-        job.started_at = datetime.utcnow()
-        job.attempt += 1
-        db.commit()
-        
-        try:
-            # Get schedule and post data
+        # Get schedule and post data
+        with get_db() as db:
             schedule = db.query(Schedule).filter(Schedule.id == job.schedule_id).first()
             if not schedule:
                 raise ValueError(f"Schedule {job.schedule_id} not found")
@@ -92,10 +102,14 @@ def publish_post(job_id: str):
                     url=f"https://x.com/i/web/status/{x_post_id}"
                 )
                 db.add(published_post)
+                db.commit()
                 
-                # Update job status to succeeded
-                job.status = "succeeded"
-                job.finished_at = datetime.utcnow()
+                # Transition to succeeded state atomically
+                update_job_status(
+                    int(job_id),
+                    PublishJobStatus.SUCCEEDED.value,
+                    finished_at=datetime.utcnow()
+                )
                 
                 logger.info(f"Successfully published post {post.id} as X post {x_post_id}")
                 
@@ -110,25 +124,32 @@ def publish_post(job_id: str):
             else:
                 raise ValueError("No post ID returned from X API")
             
-        except Exception as e:
-            logger.error(f"Failed to publish job {job_id}: {str(e)}")
-            
-            # Update job status to failed
-            job.status = "failed"
-            job.error = str(e)
-            job.finished_at = datetime.utcnow()
-            
-            # Re-raise to trigger Celery retry
-            raise
+    except Exception as e:
+        logger.error(f"Failed to publish job {job_id}: {str(e)}")
         
-        finally:
-            # Release dedupe lock
-            try:
-                release_dedupe_lock(job.schedule_id, job.planned_at)
-            except Exception as e:
-                logger.warning(f"Failed to release dedupe lock: {e}")
-            
-            db.commit()
+        # Transition to failed state atomically
+        try:
+            update_job_status(
+                int(job_id),
+                PublishJobStatus.FAILED.value,
+                error=str(e),
+                finished_at=datetime.utcnow()
+            )
+        except Exception as state_error:
+            logger.error(f"Failed to update job status to failed: {state_error}")
+        
+        # Re-raise to trigger Celery retry
+        raise
+    
+    finally:
+        # Release dedupe lock
+        try:
+            with get_db() as db:
+                job = db.query(PublishJob).filter(PublishJob.id == job_id).first()
+                if job:
+                    release_dedupe_lock(job.schedule_id, job.planned_at)
+        except Exception as e:
+            logger.warning(f"Failed to release dedupe lock: {e}")
     
     return {"status": "success", "job_id": job_id}
 
