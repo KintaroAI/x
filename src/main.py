@@ -59,6 +59,12 @@ async def view_post_page(request: Request, post_id: int):
     return await routes.view_post_page(request, post_id)
 
 
+@app.get("/tasks", response_class=HTMLResponse)
+async def tasks_page(request: Request):
+    """Celery tasks monitoring page."""
+    return await routes.tasks_page(request)
+
+
 # Health Check Endpoints
 @app.get("/api/health")
 async def health():

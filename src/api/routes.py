@@ -112,3 +112,141 @@ async def health_html():
     """Health check endpoint for HTMX."""
     return HTMLResponse("<p class='text-green-600 font-semibold'>✓ Server is healthy</p>")
 
+
+async def tasks_page(request: Request):
+    """Celery tasks monitoring page."""
+    from src.celery_app import app
+    from src.database import get_db
+    from src.models import PublishJob, Schedule, Post
+    from src.utils.state_machine import get_job_statistics
+    
+    tasks_data = {
+        "active": [],
+        "reserved": [],
+        "scheduled": [],
+        "registered": [],
+        "stats": {},
+        "jobs": [],
+        "worker_info": {},
+        "error": None
+    }
+    
+    try:
+        # Get Celery inspection API
+        inspect = app.control.inspect()
+        
+        # Get active tasks (currently running)
+        active_tasks = inspect.active() or {}
+        for worker, tasks in active_tasks.items():
+            for task in tasks:
+                tasks_data["active"].append({
+                    "worker": worker,
+                    "id": task.get("id", "unknown"),
+                    "name": task.get("name", "unknown"),
+                    "args": task.get("args", []),
+                    "kwargs": task.get("kwargs", {}),
+                    "time_start": task.get("time_start"),
+                    "hostname": task.get("hostname", "unknown"),
+                })
+        
+        # Get reserved tasks (waiting to be executed)
+        reserved_tasks = inspect.reserved() or {}
+        for worker, tasks in reserved_tasks.items():
+            for task in tasks:
+                tasks_data["reserved"].append({
+                    "worker": worker,
+                    "id": task.get("id", "unknown"),
+                    "name": task.get("name", "unknown"),
+                    "args": task.get("args", []),
+                    "kwargs": task.get("kwargs", {}),
+                    "hostname": task.get("hostname", "unknown"),
+                })
+        
+        # Get scheduled tasks (with ETA)
+        scheduled_tasks = inspect.scheduled() or {}
+        for worker, tasks in scheduled_tasks.items():
+            for task in tasks:
+                tasks_data["scheduled"].append({
+                    "worker": worker,
+                    "id": task.get("request", {}).get("id", "unknown"),
+                    "name": task.get("request", {}).get("task", "unknown"),
+                    "args": task.get("request", {}).get("args", []),
+                    "kwargs": task.get("request", {}).get("kwargs", {}),
+                    "eta": task.get("eta"),
+                    "expires": task.get("expires"),
+                })
+        
+        # Get registered tasks (all available task types)
+        registered_tasks = inspect.registered() or {}
+        for worker, tasks in registered_tasks.items():
+            for task_name in tasks:
+                if task_name not in [t["name"] for t in tasks_data["registered"]]:
+                    tasks_data["registered"].append({
+                        "name": task_name,
+                        "worker": worker,
+                    })
+        
+        # Get worker stats
+        stats = inspect.stats() or {}
+        tasks_data["worker_info"] = {
+            worker: {
+                "status": stats.get(worker, {}).get("status", "unknown"),
+                "pool": stats.get(worker, {}).get("pool", {}),
+                "total_tasks": stats.get(worker, {}).get("total", {}),
+            }
+            for worker in stats.keys()
+        }
+        
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Error querying Celery inspection API: {str(e)}", exc_info=True)
+        tasks_data["error"] = f"Error querying Celery: {str(e)}"
+    
+    # Get database job statistics
+    try:
+        tasks_data["stats"] = get_job_statistics()
+        
+        # Get recent jobs from database
+        from sqlalchemy.orm import joinedload
+        
+        with get_db() as db:
+            jobs = (
+                db.query(PublishJob)
+                .options(joinedload(PublishJob.schedule).joinedload(Schedule.post))
+                .order_by(PublishJob.created_at.desc())
+                .limit(50)
+                .all()
+            )
+            
+            for job in jobs:
+                schedule = job.schedule
+                post = schedule.post if schedule else None
+                
+                tasks_data["jobs"].append({
+                    "id": job.id,
+                    "status": job.status,
+                    "planned_at": job.planned_at.isoformat() if job.planned_at else None,
+                    "started_at": job.started_at.isoformat() if job.started_at else None,
+                    "finished_at": job.finished_at.isoformat() if job.finished_at else None,
+                    "attempt": job.attempt,
+                    "error": job.error,
+                    "post_id": post.id if post else None,
+                    "post_text": post.text[:50] + "..." if post and post.text else None,
+                })
+    
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Error querying database: {str(e)}", exc_info=True)
+        if not tasks_data["error"]:
+            tasks_data["error"] = f"Error querying database: {str(e)}"
+    
+    return templates.TemplateResponse(
+        "tasks.html",
+        {
+            "request": request,
+            "tasks_data": tasks_data,
+        }
+    )
+

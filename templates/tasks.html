@@ -1,0 +1,328 @@
+{% extends "base.html" %}
+
+{% block title %}Celery Tasks - X Scheduler{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto">
+    <div class="flex justify-between items-center mb-8">
+        <h1 class="text-4xl font-bold text-gray-900">Celery Tasks Monitor</h1>
+        <button
+            onclick="location.reload()"
+            class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded transition-colors"
+        >
+            Refresh
+        </button>
+    </div>
+
+    {% if tasks_data.error %}
+    <div class="bg-red-50 border border-red-300 rounded-lg p-4 mb-6">
+        <p class="text-red-700"><strong>Error:</strong> {{ tasks_data.error }}</p>
+        <p class="text-red-600 text-sm mt-2">Make sure Celery workers are running and accessible.</p>
+    </div>
+    {% endif %}
+
+    <!-- Worker Information -->
+    {% if tasks_data.worker_info %}
+    <div class="bg-white rounded-lg shadow-lg p-6 mb-6">
+        <h2 class="text-2xl font-semibold text-gray-800 mb-4">Workers</h2>
+        <div class="grid md:grid-cols-2 gap-4">
+            {% for worker, info in tasks_data.worker_info.items() %}
+            <div class="border border-gray-200 rounded-lg p-4">
+                <h3 class="font-semibold text-gray-700 mb-2">{{ worker }}</h3>
+                <p class="text-sm text-gray-600"><strong>Status:</strong> {{ info.status }}</p>
+                {% if info.total_tasks %}
+                <p class="text-sm text-gray-600"><strong>Total Tasks:</strong> {{ info.total_tasks }}</p>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Job Statistics -->
+    {% if tasks_data.stats %}
+    <div class="bg-white rounded-lg shadow-lg p-6 mb-6">
+        <h2 class="text-2xl font-semibold text-gray-800 mb-4">Job Statistics</h2>
+        <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
+            {% for status, count in tasks_data.stats.items() %}
+            <div class="bg-gray-50 rounded-lg p-4 text-center">
+                <div class="text-3xl font-bold {% if status == 'succeeded' %}text-green-600{% elif status == 'failed' %}text-red-600{% elif status == 'running' %}text-blue-600{% elif status == 'enqueued' %}text-yellow-600{% else %}text-gray-600{% endif %}">
+                    {{ count }}
+                </div>
+                <div class="text-sm text-gray-600 mt-1 capitalize">{{ status }}</div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Active Tasks -->
+    <div class="bg-white rounded-lg shadow-lg p-6 mb-6">
+        <h2 class="text-2xl font-semibold text-gray-800 mb-4">
+            Active Tasks
+            <span class="text-lg font-normal text-gray-600">({{ tasks_data.active|length }})</span>
+        </h2>
+        {% if tasks_data.active %}
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Task ID</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Worker</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Started</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Args</th>
+                    </tr>
+                </thead>
+                <tbody class="bg-white divide-y divide-gray-200">
+                    {% for task in tasks_data.active %}
+                    <tr>
+                        <td class="px-4 py-3 whitespace-nowrap text-sm font-mono text-gray-600">{{ task.id[:20] }}...</td>
+                        <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900">{{ task.name }}</td>
+                        <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-600">{{ task.worker }}</td>
+                        <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-600">
+                            {% if task.time_start %}
+                            {{ task.time_start }}
+                            {% else %}
+                            -
+                            {% endif %}
+                        </td>
+                        <td class="px-4 py-3 text-sm text-gray-600">
+                            <code class="text-xs bg-gray-100 px-2 py-1 rounded">{{ task.args|join(", ") }}</code>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="text-gray-600">No active tasks currently running.</p>
+        {% endif %}
+    </div>
+
+    <!-- Scheduled Tasks -->
+    <div class="bg-white rounded-lg shadow-lg p-6 mb-6">
+        <h2 class="text-2xl font-semibold text-gray-800 mb-4">
+            Scheduled Tasks
+            <span class="text-lg font-normal text-gray-600">({{ tasks_data.scheduled|length }})</span>
+        </h2>
+        {% if tasks_data.scheduled %}
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Task ID</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Worker</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ETA</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Args</th>
+                    </tr>
+                </thead>
+                <tbody class="bg-white divide-y divide-gray-200">
+                    {% for task in tasks_data.scheduled %}
+                    <tr>
+                        <td class="px-4 py-3 whitespace-nowrap text-sm font-mono text-gray-600">{{ task.id[:20] }}...</td>
+                        <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900">{{ task.name }}</td>
+                        <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-600">{{ task.worker }}</td>
+                        <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-600">
+                            {% if task.eta %}
+                            <span id="eta-{{ task.id }}" class="eta-time" data-eta="{{ task.eta }}"></span>
+                            {% else %}
+                            -
+                            {% endif %}
+                        </td>
+                        <td class="px-4 py-3 text-sm text-gray-600">
+                            <code class="text-xs bg-gray-100 px-2 py-1 rounded">{{ task.args|join(", ") }}</code>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="text-gray-600">No scheduled tasks.</p>
+        {% endif %}
+    </div>
+
+    <!-- Reserved Tasks -->
+    <div class="bg-white rounded-lg shadow-lg p-6 mb-6">
+        <h2 class="text-2xl font-semibold text-gray-800 mb-4">
+            Reserved Tasks
+            <span class="text-lg font-normal text-gray-600">({{ tasks_data.reserved|length }})</span>
+        </h2>
+        {% if tasks_data.reserved %}
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Task ID</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Worker</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Args</th>
+                    </tr>
+                </thead>
+                <tbody class="bg-white divide-y divide-gray-200">
+                    {% for task in tasks_data.reserved %}
+                    <tr>
+                        <td class="px-4 py-3 whitespace-nowrap text-sm font-mono text-gray-600">{{ task.id[:20] }}...</td>
+                        <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900">{{ task.name }}</td>
+                        <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-600">{{ task.worker }}</td>
+                        <td class="px-4 py-3 text-sm text-gray-600">
+                            <code class="text-xs bg-gray-100 px-2 py-1 rounded">{{ task.args|join(", ") }}</code>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="text-gray-600">No reserved tasks.</p>
+        {% endif %}
+    </div>
+
+    <!-- Registered Tasks -->
+    <div class="bg-white rounded-lg shadow-lg p-6 mb-6">
+        <h2 class="text-2xl font-semibold text-gray-800 mb-4">
+            Registered Tasks
+            <span class="text-lg font-normal text-gray-600">({{ tasks_data.registered|length }})</span>
+        </h2>
+        {% if tasks_data.registered %}
+        <div class="flex flex-wrap gap-2">
+            {% for task in tasks_data.registered %}
+            <span class="inline-block bg-blue-100 text-blue-800 text-sm px-3 py-1 rounded-full">{{ task.name }}</span>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="text-gray-600">No registered tasks found.</p>
+        {% endif %}
+    </div>
+
+    <!-- Recent Jobs from Database -->
+    <div class="bg-white rounded-lg shadow-lg p-6 mb-6">
+        <h2 class="text-2xl font-semibold text-gray-800 mb-4">
+            Recent Publish Jobs
+            <span class="text-lg font-normal text-gray-600">({{ tasks_data.jobs|length }})</span>
+        </h2>
+        {% if tasks_data.jobs %}
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Job ID</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Post</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Planned At</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Started At</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Finished At</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Attempt</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Error</th>
+                    </tr>
+                </thead>
+                <tbody class="bg-white divide-y divide-gray-200">
+                    {% for job in tasks_data.jobs %}
+                    <tr>
+                        <td class="px-4 py-3 whitespace-nowrap text-sm font-mono text-gray-600">{{ job.id }}</td>
+                        <td class="px-4 py-3 whitespace-nowrap">
+                            <span class="px-2 py-1 text-xs rounded-full font-semibold
+                                {% if job.status == 'succeeded' %}bg-green-100 text-green-800
+                                {% elif job.status == 'failed' %}bg-red-100 text-red-800
+                                {% elif job.status == 'running' %}bg-blue-100 text-blue-800
+                                {% elif job.status == 'enqueued' %}bg-yellow-100 text-yellow-800
+                                {% elif job.status == 'planned' %}bg-gray-100 text-gray-800
+                                {% else %}bg-gray-100 text-gray-800{% endif %}">
+                                {{ job.status }}
+                            </span>
+                        </td>
+                        <td class="px-4 py-3 text-sm">
+                            {% if job.post_id %}
+                            <a href="/view-post/{{ job.post_id }}" class="text-blue-600 hover:text-blue-800">
+                                Post #{{ job.post_id }}
+                            </a>
+                            {% if job.post_text %}
+                            <br><span class="text-xs text-gray-500">{{ job.post_text }}</span>
+                            {% endif %}
+                            {% else %}
+                            -
+                            {% endif %}
+                        </td>
+                        <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-600">
+                            {% if job.planned_at %}
+                            <span class="time-display" data-time="{{ job.planned_at }}"></span>
+                            {% else %}
+                            -
+                            {% endif %}
+                        </td>
+                        <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-600">
+                            {% if job.started_at %}
+                            <span class="time-display" data-time="{{ job.started_at }}"></span>
+                            {% else %}
+                            -
+                            {% endif %}
+                        </td>
+                        <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-600">
+                            {% if job.finished_at %}
+                            <span class="time-display" data-time="{{ job.finished_at }}"></span>
+                            {% else %}
+                            -
+                            {% endif %}
+                        </td>
+                        <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-600">{{ job.attempt }}</td>
+                        <td class="px-4 py-3 text-sm text-red-600 max-w-xs truncate" title="{{ job.error or '' }}">
+                            {{ job.error[:50] + "..." if job.error and job.error|length > 50 else (job.error or "-") }}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="text-gray-600">No jobs found in database.</p>
+        {% endif %}
+    </div>
+</div>
+
+<script>
+    // Format time displays
+    document.querySelectorAll('.time-display').forEach(el => {
+        const timeStr = el.getAttribute('data-time');
+        if (timeStr) {
+            try {
+                const date = new Date(timeStr);
+                el.textContent = date.toLocaleString();
+            } catch (e) {
+                el.textContent = timeStr;
+            }
+        }
+    });
+
+    // Format ETA times
+    document.querySelectorAll('.eta-time').forEach(el => {
+        const etaStr = el.getAttribute('data-eta');
+        if (etaStr) {
+            try {
+                const date = new Date(etaStr);
+                const now = new Date();
+                const diff = date - now;
+                
+                if (diff < 0) {
+                    el.textContent = 'Overdue';
+                    el.classList.add('text-red-600');
+                } else if (diff < 60000) {
+                    el.textContent = 'Soon';
+                    el.classList.add('text-yellow-600');
+                } else {
+                    el.textContent = date.toLocaleString();
+                }
+            } catch (e) {
+                el.textContent = etaStr;
+            }
+        }
+    });
+
+    // Auto-refresh every 30 seconds
+    setTimeout(() => {
+        location.reload();
+    }, 30000);
+</script>
+{% endblock %}
+
