@@ -99,14 +99,23 @@ def publish_post(job_id: str):
             if result.get("data", {}).get("id"):
                 x_post_id = result["data"]["id"]
                 
-                # Create published_post record
-                published_post = PublishedPost(
-                    post_id=post.id,
-                    x_post_id=x_post_id,
-                    published_at=datetime.utcnow(),
-                    url=f"https://x.com/i/web/status/{x_post_id}"
-                )
-                db.add(published_post)
+                # Check if PublishedPost already exists (idempotent - handles retries/re-enqueues)
+                existing_published = db.query(PublishedPost).filter(
+                    PublishedPost.x_post_id == x_post_id
+                ).first()
+                
+                if existing_published:
+                    logger.info(f"PublishedPost with x_post_id {x_post_id} already exists - skipping creation (idempotent)")
+                else:
+                    # Create published_post record only if it doesn't exist
+                    published_post = PublishedPost(
+                        post_id=post.id,
+                        x_post_id=x_post_id,
+                        published_at=datetime.utcnow(),
+                        url=f"https://x.com/i/web/status/{x_post_id}"
+                    )
+                    db.add(published_post)
+                
                 db.commit()
                 
                 # Transition to succeeded state atomically
@@ -132,14 +141,29 @@ def publish_post(job_id: str):
     except Exception as e:
         logger.error(f"Failed to publish job {job_id}: {str(e)}")
         
-        # Transition to failed state atomically
+        # Try to transition to failed state atomically
+        # Note: Can only transition to failed from "running" state
+        # If error occurred before reaching "running", status is still "enqueued"
+        # In that case, let Celery retry (will transition to "running" on retry)
         try:
-            update_job_status(
-                int(job_id),
-                PublishJobStatus.FAILED.value,
-                error=str(e),
-                finished_at=datetime.utcnow()
-            )
+            # Get current status to see if we can transition to failed
+            with get_db() as db:
+                job = db.query(PublishJob).filter(PublishJob.id == int(job_id)).first()
+                if job and job.status == PublishJobStatus.RUNNING.value:
+                    # We were in "running" state, can transition to "failed"
+                    update_job_status(
+                        int(job_id),
+                        PublishJobStatus.FAILED.value,
+                        error=str(e),
+                        finished_at=datetime.utcnow()
+                    )
+                elif job and job.status == PublishJobStatus.ENQUEUED.value:
+                    # Error happened before we transitioned to "running"
+                    # Log error but don't change status - let Celery retry
+                    logger.info(f"Error occurred while job {job_id} still enqueued - will retry via Celery")
+                else:
+                    # Job might be in terminal state already, or status is unexpected
+                    logger.warning(f"Job {job_id} in unexpected status {job.status if job else 'not found'} - cannot update to failed")
         except Exception as state_error:
             logger.error(f"Failed to update job status to failed: {state_error}")
         
