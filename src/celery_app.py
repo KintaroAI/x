@@ -40,11 +40,15 @@ app.conf.task_routes = {
 # Rate-limit tier configuration
 API_TIER = os.getenv("X_API_TIER", "basic")
 
-# Beat schedule configuration (runs every minute)
+# Beat schedule configuration
 app.conf.beat_schedule = {
     "scheduler-tick-every-60s": {
         "task": "scheduler.tick",
         "schedule": crontab(minute="*"),  # Every minute
+    },
+    "cleanup-orphaned-jobs-every-5min": {
+        "task": "scheduler.cleanup_orphaned_jobs",
+        "schedule": crontab(minute="*/5"),  # Every 5 minutes
     },
 }
 

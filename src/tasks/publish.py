@@ -44,26 +44,31 @@ def publish_post(job_id: str):
         return {"status": "already_completed", "result": current_status}
     
     try:
-        # Get the job first to access its attempt count
+        # Get the job first to access its attempt count and schedule_id
+        # Extract values while session is active to avoid detached instance error
+        current_attempt = 0
+        schedule_id = None
         with get_db() as db:
             job = db.query(PublishJob).filter(PublishJob.id == int(job_id)).first()
             if not job:
                 logger.error(f"Job {job_id} not found")
                 return {"status": "error", "message": "Job not found"}
+            current_attempt = job.attempt  # Extract attempt while session is active
+            schedule_id = job.schedule_id  # Extract schedule_id while session is active
         
         # Transition to running state atomically
-        job = update_job_status(
+        update_job_status(
             int(job_id), 
             PublishJobStatus.RUNNING.value,
             started_at=datetime.utcnow(),
-            attempt=job.attempt + 1
+            attempt=current_attempt + 1
         )
         
         # Get schedule and post data
         with get_db() as db:
-            schedule = db.query(Schedule).filter(Schedule.id == job.schedule_id).first()
+            schedule = db.query(Schedule).filter(Schedule.id == schedule_id).first()
             if not schedule:
-                raise ValueError(f"Schedule {job.schedule_id} not found")
+                raise ValueError(f"Schedule {schedule_id} not found")
             
             post = db.query(Post).filter(Post.id == schedule.post_id).first()
             if not post:
