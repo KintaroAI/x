@@ -63,16 +63,9 @@ def scheduler_tick():
                     db.add(job)
                     db.flush()  # Get job.id
                     
-                    # Enqueue publish task with ETA
-                    from src.tasks.publish import publish_post
-                    publish_post.apply_async(
-                        kwargs={"job_id": str(job.id)}, 
-                        eta=planned_at
-                    )
-                    
-                    # Update job status to enqueued
-                    job.status = "enqueued"
-                    job.enqueued_at = datetime.utcnow()
+                    # Enqueue publish task with ETA via shared helper
+                    from src.utils.job_queue import enqueue_publish_job
+                    enqueue_publish_job(job.id, eta=planned_at)
                     
                     # Compute and persist next run time
                     next_run_at = scheduler_resolver.resolve_schedule(schedule)

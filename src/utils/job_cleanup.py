@@ -8,6 +8,7 @@ from src.database import get_db
 from src.models import PublishJob
 from src.utils.state_machine import PublishJobStatus
 from src.tasks.publish import publish_post
+from src.utils.job_queue import enqueue_publish_job
 from src.utils.redis_utils import get_redis_client
 
 logger = logging.getLogger(__name__)
@@ -97,24 +98,15 @@ def re_enqueue_orphaned_job(job_id: int) -> bool:
         
         logger.info(f"Re-enqueuing orphaned job {job_id}")
         
-        # Re-enqueue the task
-        publish_post.apply_async(kwargs={"job_id": str(job_id)})
-        
-        # Update enqueued_at timestamp
-        with get_db() as db:
-            job = db.query(PublishJob).filter(PublishJob.id == job_id).first()
-            if job and job.status == PublishJobStatus.ENQUEUED.value:
-                job.enqueued_at = datetime.utcnow()
-                job.updated_at = datetime.utcnow()
-                db.commit()
-                logger.info(f"Successfully re-enqueued orphaned job {job_id}")
-                # Release lock after successful update
-                redis_client.delete(lock_key)
-                return True
-            else:
-                logger.warning(f"Job {job_id} status changed during re-enqueue - skipping update")
-                redis_client.delete(lock_key)
-                return False
+        # Re-enqueue via helper (updates status and enqueued_at)
+        success = enqueue_publish_job(job_id)
+        if success:
+            logger.info(f"Successfully re-enqueued orphaned job {job_id}")
+        else:
+            logger.warning(f"Failed to re-enqueue orphaned job {job_id}")
+        # Release lock after attempt
+        redis_client.delete(lock_key)
+        return success
         
     except Exception as e:
         logger.error(f"Failed to re-enqueue job {job_id}: {str(e)}", exc_info=True)
@@ -213,24 +205,13 @@ def enqueue_planned_job(job_id: int) -> bool:
                 )
                 return False
 
-        # Enqueue immediately (planned time already due)
-        publish_post.apply_async(kwargs={"job_id": str(job_id)})
-
-        # Update to enqueued
-        with get_db() as db:
-            job = db.query(PublishJob).filter(PublishJob.id == job_id).first()
-            if job and job.status == PublishJobStatus.PLANNED.value:
-                job.status = PublishJobStatus.ENQUEUED.value
-                job.enqueued_at = datetime.utcnow()
-                job.updated_at = datetime.utcnow()
-                db.commit()
-                logger.info(f"Enqueued planned job {job_id}")
-                return True
-            else:
-                logger.warning(
-                    f"Job {job_id} status changed before update (now: {job.status if job else 'missing'})"
-                )
-                return False
+        # Enqueue immediately (planned time already due) using helper
+        if enqueue_publish_job(job_id):
+            logger.info(f"Enqueued planned job {job_id}")
+            return True
+        else:
+            logger.warning(f"Failed to enqueue planned job {job_id}")
+            return False
     except Exception as e:
         logger.error(f"Failed to enqueue planned job {job_id}: {str(e)}", exc_info=True)
         return False

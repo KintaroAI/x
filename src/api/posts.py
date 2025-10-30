@@ -477,15 +477,11 @@ async def instant_publish(post_id: int):
             # Immediately enqueue to Celery and update status to "enqueued"
             # If enqueuing fails, we'll keep status as "planned" so it can be picked up by cleanup
             try:
-                publish_post.apply_async(kwargs={"job_id": str(job_id)})
-                # Update status to enqueued in a new transaction
-                with get_db() as db_update:
-                    job_update = db_update.query(PublishJob).filter(PublishJob.id == job_id).first()
-                    if job_update:
-                        job_update.status = PublishJobStatus.ENQUEUED.value
-                        job_update.enqueued_at = datetime.utcnow()
-                        db_update.commit()
-                logger.info(f"Successfully enqueued job {job_id} to Celery")
+                from src.utils.job_queue import enqueue_publish_job
+                if enqueue_publish_job(job_id):
+                    logger.info(f"Successfully enqueued job {job_id} to Celery")
+                else:
+                    raise RuntimeError("enqueue helper returned False")
             except Exception as e:
                 # If enqueuing fails (e.g., Celery not running), keep status as "planned"
                 # The job will be picked up by the cleanup mechanism or can be manually re-enqueued
