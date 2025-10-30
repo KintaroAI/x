@@ -139,26 +139,99 @@ def cleanup_orphaned_jobs(timeout_minutes: int = 5) -> Dict[str, Any]:
     logger.info(f"Starting cleanup of orphaned jobs (timeout: {timeout_minutes} minutes)")
     
     orphaned_job_ids = find_orphaned_enqueued_jobs(timeout_minutes)
-    
+
+    # NEW: Also find planned jobs whose planned_at is due (<= now)
+    due_planned_job_ids = find_due_planned_jobs()
+
     stats = {
         "found": len(orphaned_job_ids),
         "re_enqueued": 0,
         "failed": 0,
-        "job_ids": []
+        "job_ids": [],
+        # Extended stats
+        "planned_found": len(due_planned_job_ids),
+        "planned_enqueued": 0,
+        "planned_failed": 0,
+        "planned_job_ids": [],
     }
-    
-    # Process each job by ID (re-enqueue will create its own session)
+
+    # Process orphaned enqueued jobs
     for job_id in orphaned_job_ids:
         stats["job_ids"].append(job_id)
         if re_enqueue_orphaned_job(job_id):
             stats["re_enqueued"] += 1
         else:
             stats["failed"] += 1
-    
+
+    # Process due planned jobs: enqueue and mark enqueued
+    for job_id in due_planned_job_ids:
+        stats["planned_job_ids"].append(job_id)
+        if enqueue_planned_job(job_id):
+            stats["planned_enqueued"] += 1
+        else:
+            stats["planned_failed"] += 1
+
     logger.info(
-        f"Cleanup completed: found {stats['found']} orphaned jobs, "
-        f"re-enqueued {stats['re_enqueued']}, failed {stats['failed']}"
+        (
+            f"Cleanup completed: found {stats['found']} orphaned jobs, "
+            f"re-enqueued {stats['re_enqueued']}, failed {stats['failed']}; "
+            f"planned due: {stats['planned_found']}, "
+            f"planned enqueued: {stats['planned_enqueued']}, planned failed: {stats['planned_failed']}"
+        )
     )
-    
+
     return stats
+
+
+def find_due_planned_jobs() -> List[int]:
+    """Return IDs of PublishJobs with status 'planned' and planned_at <= now."""
+    now = datetime.utcnow()
+    with get_db() as db:
+        result = db.query(PublishJob.id).filter(
+            PublishJob.status == PublishJobStatus.PLANNED.value,
+            PublishJob.planned_at <= now,
+        ).all()
+        return [row[0] for row in result]
+
+
+def enqueue_planned_job(job_id: int) -> bool:
+    """
+    Enqueue a planned job that is due, and mark it as enqueued.
+
+    Returns True on success, False otherwise.
+    """
+    try:
+        # Double-check status before enqueue
+        with get_db() as db:
+            job = db.query(PublishJob).filter(PublishJob.id == job_id).first()
+            if not job:
+                logger.warning(f"Planned job {job_id} not found")
+                return False
+            if job.status != PublishJobStatus.PLANNED.value:
+                logger.info(
+                    f"Job {job_id} no longer planned (status: {job.status}) - skipping"
+                )
+                return False
+
+        # Enqueue immediately (planned time already due)
+        publish_post.apply_async(kwargs={"job_id": str(job_id)})
+
+        # Update to enqueued
+        with get_db() as db:
+            job = db.query(PublishJob).filter(PublishJob.id == job_id).first()
+            if job and job.status == PublishJobStatus.PLANNED.value:
+                job.status = PublishJobStatus.ENQUEUED.value
+                job.enqueued_at = datetime.utcnow()
+                job.updated_at = datetime.utcnow()
+                db.commit()
+                logger.info(f"Enqueued planned job {job_id}")
+                return True
+            else:
+                logger.warning(
+                    f"Job {job_id} status changed before update (now: {job.status if job else 'missing'})"
+                )
+                return False
+    except Exception as e:
+        logger.error(f"Failed to enqueue planned job {job_id}: {str(e)}", exc_info=True)
+        return False
 
