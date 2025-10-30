@@ -110,6 +110,17 @@ async def get_twitter_profile(username: str = Form(...)):
     return await twitter.get_twitter_profile(username)
 
 
+# OAuth2 Tweepy PKCE endpoints
+@app.get("/auth/start")
+async def auth_start():
+    return await twitter.oauth_start()
+
+
+@app.get("/auth/callback")
+async def auth_callback(request: Request):
+    return await twitter.oauth_callback(request)
+
+
 # Post CRUD Endpoints
 @app.get("/api/posts")
 async def get_posts(include_deleted: bool = False):
