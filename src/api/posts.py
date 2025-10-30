@@ -468,53 +468,73 @@ async def instant_publish(post_id: int):
                 dedupe_key=f"{schedule.id}_{datetime.utcnow().isoformat()}"
             )
             db.add(publish_job)
-            db.flush()  # Get job.id without committing yet
+            db.commit()  # Commit first so job is visible to worker before task executes
+            db.refresh(publish_job)
+            
+            # Extract job ID while session is active (avoid detached instance errors)
+            job_id = publish_job.id
             
             # Immediately enqueue to Celery and update status to "enqueued"
             # If enqueuing fails, we'll keep status as "planned" so it can be picked up by cleanup
             try:
-                publish_post.apply_async(kwargs={"job_id": str(publish_job.id)})
-                publish_job.status = PublishJobStatus.ENQUEUED.value
-                publish_job.enqueued_at = datetime.utcnow()
-                logger.info(f"Successfully enqueued job {publish_job.id} to Celery")
+                publish_post.apply_async(kwargs={"job_id": str(job_id)})
+                # Update status to enqueued in a new transaction
+                with get_db() as db_update:
+                    job_update = db_update.query(PublishJob).filter(PublishJob.id == job_id).first()
+                    if job_update:
+                        job_update.status = PublishJobStatus.ENQUEUED.value
+                        job_update.enqueued_at = datetime.utcnow()
+                        db_update.commit()
+                logger.info(f"Successfully enqueued job {job_id} to Celery")
             except Exception as e:
                 # If enqueuing fails (e.g., Celery not running), keep status as "planned"
                 # The job will be picked up by the cleanup mechanism or can be manually re-enqueued
-                logger.error(f"Failed to enqueue job {publish_job.id} to Celery: {str(e)}", exc_info=True)
+                logger.error(f"Failed to enqueue job {job_id} to Celery: {str(e)}", exc_info=True)
                 # Keep status as "planned" - cleanup can pick it up later
                 # Don't update enqueued_at
                 log_error(
                     action="instant_publish_enqueue_failed",
-                    message=f"Failed to enqueue job {publish_job.id} to Celery",
+                    message=f"Failed to enqueue job {job_id} to Celery",
                     component="api",
                     extra_data=json.dumps({
                         "post_id": post_id,
-                        "job_id": publish_job.id,
+                        "job_id": job_id,
                         "error": str(e)
                     })
                 )
             
-            db.commit()
-            db.refresh(publish_job)
+            # Get final job status for response (using a fresh query to avoid detached instance)
+            with get_db() as db_final:
+                final_job = db_final.query(PublishJob).filter(PublishJob.id == job_id).first()
+                if final_job:
+                    final_status = final_job.status
+                    final_planned_at = final_job.planned_at
+                    final_job_id = final_job.id
+                else:
+                    # Fallback if job somehow disappeared (shouldn't happen, but handle gracefully)
+                    logger.warning(f"Job {job_id} not found when building response - using defaults")
+                    final_status = "enqueued" if "Successfully enqueued" in locals() else "planned"
+                    final_planned_at = datetime.utcnow()  # Use current time as fallback
+                    final_job_id = job_id
             
-            logger.info(f"Created and enqueued instant publish job {publish_job.id} for post {post_id}")
+            logger.info(f"Created and enqueued instant publish job {final_job_id} for post {post_id}")
             log_info(
                 action="instant_publish_job_created",
-                message=f"Created and enqueued instant publish job {publish_job.id} for post {post_id}",
+                message=f"Created and enqueued instant publish job {final_job_id} for post {post_id}",
                 component="api",
                 extra_data=json.dumps({
                     "post_id": post_id,
-                    "job_id": publish_job.id,
+                    "job_id": final_job_id,
                     "schedule_id": schedule.id,
-                    "status": publish_job.status
+                    "status": final_status
                 })
             )
             
             return {
                 "message": "Publish job created and enqueued successfully",
-                "job_id": publish_job.id,
-                "status": publish_job.status,
-                "planned_at": publish_job.planned_at.isoformat(),
+                "job_id": final_job_id,
+                "status": final_status,
+                "planned_at": final_planned_at.isoformat(),
                 "already_exists": False
             }
     
