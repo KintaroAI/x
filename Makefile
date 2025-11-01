@@ -1,4 +1,4 @@
-.PHONY: help dev prod up down logs logs-api clean migrate init-db migrate-create migrate-create-simple shell-db update-db build-api test coverage shell-api shell-worker
+.PHONY: help dev prod up down logs logs-api clean migrate init-db migrate-create migrate-create-simple shell-db update-db build build-api build-worker test coverage shell-api shell-worker
 
 help:
 	@echo "Available commands:"
@@ -10,6 +10,7 @@ help:
 	@echo "  make clean           - Remove containers and volumes"
 	@echo "  make build           - Build Docker images"
 	@echo "  make build-api       - Rebuild API container"
+	@echo "  make build-worker    - Recreate worker and beat containers"
 	@echo "  make migrate         - Run database migrations"
 	@echo "  make init-db         - Initialize database (create tables)"
 	@echo "  make update-db       - Rebuild and apply database changes"
@@ -96,6 +97,11 @@ build-api:
 	docker compose build api
 	docker compose up -d --force-recreate api
 	@echo "API container rebuilt and restarted!"
+
+build-worker:
+	@echo "Rebuilding worker and beat containers..."
+	docker compose up -d --force-recreate worker beat
+	@echo "Worker and beat containers recreated!"
 
 # Testing commands
 test:

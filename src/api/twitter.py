@@ -200,14 +200,15 @@ async def create_twitter_post(text: str, media_ids: List[str] = None, dry_run: b
             logger.error(f"create_twitter_post: Missing OAuth1 credentials: {', '.join(missing)}")
             raise ValueError(f"OAuth1 credentials not configured. Missing: {', '.join(missing)}")
         
-        # Create OAuth1 handler and Tweepy client
-        auth = tweepy.OAuth1UserHandler(
+        # Create Tweepy client with OAuth1 credentials
+        # Pass credentials directly to Client (Tweepy v4+)
+        client = tweepy.Client(
             consumer_key=consumer_key,
             consumer_secret=consumer_secret,
             access_token=access_token,
             access_token_secret=access_token_secret,
+            wait_on_rate_limit=True
         )
-        client = tweepy.Client(auth=auth, wait_on_rate_limit=True)
         
         # Create the post
         if media_ids:
