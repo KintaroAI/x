@@ -39,8 +39,13 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - X_CLIENT_ID=${X_CLIENT_ID}
       - X_CLIENT_SECRET=${X_CLIENT_SECRET}
+      - X_ACCESS_TOKEN=${X_ACCESS_TOKEN}
+      - X_ACCESS_TOKEN_SECRET=${X_ACCESS_TOKEN_SECRET}
       - X_REDIRECT_URI=${X_REDIRECT_URI}
+      - X_API_TIER=${X_API_TIER:-basic}
       - ENVIRONMENT=${ENVIRONMENT:-dev}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - DRY_RUN=${DRY_RUN:-false}
       - DEFAULT_TIMEZONE=${DEFAULT_TIMEZONE:-UTC}
     ports:
       - "${API_PORT:-8000}:8000"
@@ -67,9 +72,14 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - X_CLIENT_ID=${X_CLIENT_ID}
       - X_CLIENT_SECRET=${X_CLIENT_SECRET}
+      - X_ACCESS_TOKEN=${X_ACCESS_TOKEN}
+      - X_ACCESS_TOKEN_SECRET=${X_ACCESS_TOKEN_SECRET}
       - X_REDIRECT_URI=${X_REDIRECT_URI}
-      - ENVIRONMENT=${ENVIRONMENT:-dev}
       - X_API_TIER=${X_API_TIER:-basic}
+      - ENVIRONMENT=${ENVIRONMENT:-dev}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - DRY_RUN=${DRY_RUN:-false}
+      - DEFAULT_TIMEZONE=${DEFAULT_TIMEZONE:-UTC}
     depends_on:
       db:
         condition: service_healthy
@@ -91,7 +101,15 @@ services:
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-app_db}
       - REDIS_URL=redis://redis:6379/0
+      - X_CLIENT_ID=${X_CLIENT_ID}
+      - X_CLIENT_SECRET=${X_CLIENT_SECRET}
+      - X_ACCESS_TOKEN=${X_ACCESS_TOKEN}
+      - X_ACCESS_TOKEN_SECRET=${X_ACCESS_TOKEN_SECRET}
+      - X_API_TIER=${X_API_TIER:-basic}
       - ENVIRONMENT=${ENVIRONMENT:-dev}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - DRY_RUN=${DRY_RUN:-false}
+      - DEFAULT_TIMEZONE=${DEFAULT_TIMEZONE:-UTC}
     depends_on:
       db:
         condition: service_healthy
