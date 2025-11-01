@@ -194,8 +194,11 @@
             const response = await fetch('/api/posts/{{ post.id }}');
             const postData = await response.json();
             
-            if (postData.schedules && postData.schedules.length > 0) {
-                const schedule = postData.schedules[0]; // Use first schedule
+            // Only load ENABLED schedules (ignore disabled/cleared schedules)
+            const enabledSchedules = postData.schedules ? postData.schedules.filter(s => s.enabled === true) : [];
+            
+            if (enabledSchedules.length > 0) {
+                const schedule = enabledSchedules[0]; // Use first enabled schedule
                 
                 if (schedule.kind === 'one_shot') {
                     scheduleType.value = 'one_shot';
@@ -216,6 +219,10 @@
                     document.getElementById('schedule_timezone').value = schedule.timezone || defaultTimezone;
                 }
                 
+                updateScheduleFields();
+            } else {
+                // No enabled schedules - set to "none"
+                scheduleType.value = 'none';
                 updateScheduleFields();
             }
         } catch (error) {
