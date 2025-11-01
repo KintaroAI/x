@@ -39,6 +39,80 @@
                 <p class="mt-2 text-sm text-gray-500">Enter as JSON array of media URLs or IDs</p>
             </div>
             
+            <!-- Schedule Section -->
+            <div class="mb-6 p-4 border border-gray-200 rounded-lg bg-gray-50">
+                <h3 class="text-lg font-semibold text-gray-900 mb-4">Schedule (Optional)</h3>
+                
+                <div class="mb-4">
+                    <label for="schedule_type" class="block text-sm font-medium text-gray-700 mb-2">
+                        Schedule Type
+                    </label>
+                    <select 
+                        id="schedule_type" 
+                        name="schedule_type"
+                        class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                        <option value="none">No Schedule</option>
+                        <option value="one_shot">One-Time (Specific Date/Time)</option>
+                        <option value="cron">Recurring (Cron Expression)</option>
+                    </select>
+                </div>
+                
+                <!-- One-Shot Schedule Fields -->
+                <div id="one_shot_fields" class="mb-4 hidden">
+                    <label for="one_shot_datetime" class="block text-sm font-medium text-gray-700 mb-2">
+                        Date & Time (UTC)
+                    </label>
+                    <input 
+                        type="datetime-local" 
+                        id="one_shot_datetime" 
+                        name="one_shot_datetime"
+                        class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                    <p class="mt-2 text-sm text-gray-500">Select when to publish this post</p>
+                </div>
+                
+                <!-- Cron Schedule Fields -->
+                <div id="cron_fields" class="mb-4 hidden">
+                    <label for="cron_expression" class="block text-sm font-medium text-gray-700 mb-2">
+                        Cron Expression
+                    </label>
+                    <input 
+                        type="text" 
+                        id="cron_expression" 
+                        name="cron_expression"
+                        class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono text-sm"
+                        placeholder="0 9 * * * (minute hour day month day-of-week)">
+                    <p class="mt-2 text-sm text-gray-500">
+                        Format: <code class="bg-gray-100 px-1 rounded">minute hour day month day-of-week</code>
+                        <br>
+                        Examples: 
+                        <code class="bg-gray-100 px-1 rounded">0 9 * * *</code> (daily at 9 AM),
+                        <code class="bg-gray-100 px-1 rounded">0 */2 * * *</code> (every 2 hours),
+                        <code class="bg-gray-100 px-1 rounded">0 9 * * 1-5</code> (weekdays at 9 AM)
+                    </p>
+                </div>
+                
+                <!-- Timezone Field (for cron) -->
+                <div id="timezone_fields" class="mb-4 hidden">
+                    <label for="schedule_timezone" class="block text-sm font-medium text-gray-700 mb-2">
+                        Timezone
+                    </label>
+                    <select 
+                        id="schedule_timezone" 
+                        name="schedule_timezone"
+                        class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                        <option value="UTC">UTC</option>
+                        <option value="America/New_York">Eastern Time (ET)</option>
+                        <option value="America/Chicago">Central Time (CT)</option>
+                        <option value="America/Denver">Mountain Time (MT)</option>
+                        <option value="America/Los_Angeles">Pacific Time (PT)</option>
+                        <option value="Europe/London">London (GMT)</option>
+                        <option value="Europe/Paris">Paris (CET)</option>
+                        <option value="Asia/Tokyo">Tokyo (JST)</option>
+                    </select>
+                    <p class="mt-2 text-sm text-gray-500">Timezone for the cron schedule</p>
+                </div>
+            </div>
+            
             <div id="result" class="mb-4"></div>
             
             <div class="flex space-x-4">
@@ -83,6 +157,68 @@
     textArea.addEventListener('input', function() {
         updateCharCount();
     });
+    
+    // Schedule type change handler
+    const scheduleType = document.getElementById('schedule_type');
+    const oneShotFields = document.getElementById('one_shot_fields');
+    const cronFields = document.getElementById('cron_fields');
+    const timezoneFields = document.getElementById('timezone_fields');
+    
+    function updateScheduleFields() {
+        const type = scheduleType.value;
+        
+        // Hide all fields first
+        oneShotFields.classList.add('hidden');
+        cronFields.classList.add('hidden');
+        timezoneFields.classList.add('hidden');
+        
+        // Show relevant fields based on type
+        if (type === 'one_shot') {
+            oneShotFields.classList.remove('hidden');
+        } else if (type === 'cron') {
+            cronFields.classList.remove('hidden');
+            timezoneFields.classList.remove('hidden');
+        }
+    }
+    
+    scheduleType.addEventListener('change', updateScheduleFields);
+    
+    // Load existing schedule data when editing (if post has schedules)
+    {% if post %}
+    (async function() {
+        try {
+            const response = await fetch('/api/posts/{{ post.id }}');
+            const postData = await response.json();
+            
+            if (postData.schedules && postData.schedules.length > 0) {
+                const schedule = postData.schedules[0]; // Use first schedule
+                
+                if (schedule.kind === 'one_shot') {
+                    scheduleType.value = 'one_shot';
+                    const oneShotInput = document.getElementById('one_shot_datetime');
+                    if (schedule.schedule_spec) {
+                        // Parse ISO datetime and convert to local datetime-local format
+                        const dt = new Date(schedule.schedule_spec);
+                        const year = dt.getFullYear();
+                        const month = String(dt.getMonth() + 1).padStart(2, '0');
+                        const day = String(dt.getDate()).padStart(2, '0');
+                        const hours = String(dt.getHours()).padStart(2, '0');
+                        const minutes = String(dt.getMinutes()).padStart(2, '0');
+                        oneShotInput.value = `${year}-${month}-${day}T${hours}:${minutes}`;
+                    }
+                } else if (schedule.kind === 'cron') {
+                    scheduleType.value = 'cron';
+                    document.getElementById('cron_expression').value = schedule.schedule_spec || '';
+                    document.getElementById('schedule_timezone').value = schedule.timezone || 'UTC';
+                }
+                
+                updateScheduleFields();
+            }
+        } catch (error) {
+            console.error('Error loading schedule data:', error);
+        }
+    })();
+    {% endif %}
     
     // Handle form submission success - redirect after successful update
     document.addEventListener('htmx:afterSwap', function(event) {

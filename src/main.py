@@ -129,15 +129,34 @@ async def get_posts(include_deleted: bool = False):
 
 
 @app.post("/api/posts")
-async def create_post(text: str = Form(...), media_refs: str = Form(None)):
-    """Create a new post (draft)."""
-    return await posts.create_post(text, media_refs)
+async def create_post(
+    text: str = Form(...),
+    media_refs: str = Form(None),
+    schedule_type: str = Form("none"),
+    cron_expression: str = Form(None),
+    one_shot_datetime: str = Form(None),
+    schedule_timezone: str = Form(None)
+):
+    """Create a new post (draft) with optional schedule."""
+    return await posts.create_post(
+        text, media_refs, schedule_type, cron_expression, one_shot_datetime, schedule_timezone
+    )
 
 
 @app.post("/api/posts/{post_id}")
-async def update_post(post_id: int, text: str = Form(...), media_refs: str = Form(None)):
-    """Update an existing post."""
-    return await posts.update_post(post_id, text, media_refs)
+async def update_post(
+    post_id: int,
+    text: str = Form(...),
+    media_refs: str = Form(None),
+    schedule_type: str = Form("none"),
+    cron_expression: str = Form(None),
+    one_shot_datetime: str = Form(None),
+    schedule_timezone: str = Form(None)
+):
+    """Update an existing post and its schedule."""
+    return await posts.update_post(
+        post_id, text, media_refs, schedule_type, cron_expression, one_shot_datetime, schedule_timezone
+    )
 
 
 @app.delete("/api/posts/{post_id}")

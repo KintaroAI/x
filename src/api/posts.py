@@ -3,14 +3,142 @@
 import json
 import logging
 from datetime import datetime, timedelta
+from typing import Optional
 from fastapi import Form
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from src.models import Post
+from src.models import Post, Schedule
 from src.database import get_db
 from src.audit import log_info, log_error
+from src.services.scheduler_service import ScheduleResolver
 
 logger = logging.getLogger(__name__)
+
+
+def create_or_update_schedule(
+    db,
+    post_id: int,
+    schedule_type: Optional[str] = None,
+    cron_expression: Optional[str] = None,
+    one_shot_datetime: Optional[str] = None,
+    timezone: Optional[str] = None
+) -> Optional[Schedule]:
+    """
+    Create or update a schedule for a post.
+    
+    Args:
+        db: Database session
+        post_id: ID of the post
+        schedule_type: 'none', 'one_shot', or 'cron'
+        cron_expression: Cron expression string (for cron type)
+        one_shot_datetime: ISO datetime string (for one_shot type)
+        timezone: Timezone string (for cron type)
+    
+    Returns:
+        Schedule instance if created/updated, None if cleared
+    """
+    # Get existing schedule for this post
+    existing_schedule = db.query(Schedule).filter(Schedule.post_id == post_id).first()
+    
+    # If schedule_type is 'none', clear/disable the schedule
+    if schedule_type == "none" or not schedule_type:
+        if existing_schedule:
+            # Clear next_run_at and disable schedule
+            existing_schedule.next_run_at = None
+            existing_schedule.enabled = False
+            existing_schedule.updated_at = datetime.utcnow()
+            logger.info(f"Cleared schedule {existing_schedule.id} for post {post_id}")
+            return existing_schedule
+        return None
+    
+    # Validate schedule type
+    if schedule_type not in ["one_shot", "cron"]:
+        raise ValueError(f"Invalid schedule_type: {schedule_type}")
+    
+    resolver = ScheduleResolver()
+    
+    # Prepare schedule data
+    if schedule_type == "one_shot":
+        if not one_shot_datetime:
+            raise ValueError("one_shot_datetime is required for one_shot schedule")
+        
+        # Parse datetime string from form (datetime-local format: YYYY-MM-DDTHH:MM)
+        # Note: datetime-local doesn't include timezone, so we treat it as UTC
+        try:
+            # Parse datetime-local format (YYYY-MM-DDTHH:MM)
+            dt = datetime.fromisoformat(one_shot_datetime)
+            if dt.tzinfo is None:
+                # Assume UTC if no timezone specified
+                dt = dt.replace(tzinfo=None)
+            else:
+                # Convert to UTC and remove timezone info
+                dt = dt.astimezone(tz=None).replace(tzinfo=None)
+            
+            schedule_spec = dt.isoformat()
+            schedule_timezone = "UTC"
+        except ValueError as e:
+            raise ValueError(f"Invalid datetime format: {e}. Expected format: YYYY-MM-DDTHH:MM")
+    
+    elif schedule_type == "cron":
+        if not cron_expression:
+            raise ValueError("cron_expression is required for cron schedule")
+        
+        schedule_spec = cron_expression.strip()
+        schedule_timezone = timezone or "UTC"
+    
+    # Create or update schedule
+    if existing_schedule:
+        # Update existing schedule
+        existing_schedule.kind = schedule_type
+        existing_schedule.schedule_spec = schedule_spec
+        existing_schedule.timezone = schedule_timezone
+        existing_schedule.enabled = True
+        existing_schedule.updated_at = datetime.utcnow()
+        
+        # Recalculate next_run_at using ScheduleResolver
+        # Create a temporary schedule object with updated values for resolution
+        temp_schedule = Schedule(
+            kind=schedule_type,
+            schedule_spec=schedule_spec,
+            timezone=schedule_timezone
+        )
+        next_run_at = resolver.resolve_schedule(temp_schedule)
+        
+        if next_run_at:
+            existing_schedule.next_run_at = next_run_at
+            logger.info(f"Updated schedule {existing_schedule.id} for post {post_id}, next_run_at: {next_run_at}")
+        else:
+            # If resolution fails, clear next_run_at and disable
+            existing_schedule.next_run_at = None
+            existing_schedule.enabled = False
+            logger.warning(f"Could not resolve schedule {existing_schedule.id} for post {post_id}, disabled")
+        
+        return existing_schedule
+    else:
+        # Create new schedule
+        new_schedule = Schedule(
+            post_id=post_id,
+            kind=schedule_type,
+            schedule_spec=schedule_spec,
+            timezone=schedule_timezone,
+            enabled=True,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow()
+        )
+        
+        # Calculate next_run_at
+        next_run_at = resolver.resolve_schedule(new_schedule)
+        
+        if next_run_at:
+            new_schedule.next_run_at = next_run_at
+            logger.info(f"Created schedule for post {post_id}, next_run_at: {next_run_at}")
+        else:
+            # If resolution fails, disable schedule
+            new_schedule.enabled = False
+            logger.warning(f"Could not resolve schedule for post {post_id}, created disabled")
+        
+        db.add(new_schedule)
+        return new_schedule
 
 
 async def get_posts(include_deleted: bool = False):
@@ -55,10 +183,17 @@ async def get_posts(include_deleted: bool = False):
         )
 
 
-async def create_post(text: str = Form(...), media_refs: str = Form(None)):
-    """Create a new post (draft)."""
+async def create_post(
+    text: str = Form(...),
+    media_refs: str = Form(None),
+    schedule_type: str = Form("none"),
+    cron_expression: str = Form(None),
+    one_shot_datetime: str = Form(None),
+    schedule_timezone: str = Form(None)
+):
+    """Create a new post (draft) with optional schedule."""
     try:
-        logger.debug(f"create_post called with text length: {len(text)}")
+        logger.debug(f"create_post called with text length: {len(text)}, schedule_type: {schedule_type}")
         
         # Validate text
         if not text or len(text.strip()) == 0:
@@ -101,10 +236,34 @@ async def create_post(text: str = Form(...), media_refs: str = Form(None)):
                 updated_at=datetime.utcnow()
             )
             db.add(post)
+            db.flush()  # Get post.id before creating schedule
+            
+            # Create or update schedule if provided
+            schedule_created = False
+            schedule_info = ""
+            try:
+                if schedule_type and schedule_type != "none":
+                    schedule = create_or_update_schedule(
+                        db=db,
+                        post_id=post.id,
+                        schedule_type=schedule_type,
+                        cron_expression=cron_expression if cron_expression else None,
+                        one_shot_datetime=one_shot_datetime if one_shot_datetime else None,
+                        timezone=schedule_timezone if schedule_timezone else None
+                    )
+                    if schedule:
+                        schedule_created = True
+                        next_run_str = schedule.next_run_at.strftime('%Y-%m-%d %H:%M:%S UTC') if schedule.next_run_at else "N/A"
+                        schedule_info = f"<p class='text-sm'>Schedule: {schedule.kind}, Next run: {next_run_str}</p>"
+            except Exception as schedule_error:
+                logger.warning(f"Error creating schedule: {schedule_error}")
+                # Don't fail post creation if schedule creation fails
+                schedule_info = f"<p class='text-sm text-orange-600'>Warning: Could not create schedule: {schedule_error}</p>"
+            
             db.commit()
             db.refresh(post)
             
-            logger.info(f"Created new post with id: {post.id}")
+            logger.info(f"Created new post with id: {post.id}, schedule_created: {schedule_created}")
             log_info(
                 action="post_created",
                 message=f"Created new post with id {post.id}",
@@ -112,7 +271,8 @@ async def create_post(text: str = Form(...), media_refs: str = Form(None)):
                 extra_data=json.dumps({
                     "post_id": post.id,
                     "text_length": len(text),
-                    "has_media": media_data is not None
+                    "has_media": media_data is not None,
+                    "schedule_type": schedule_type if schedule_type != "none" else None
                 })
             )
             
@@ -123,6 +283,7 @@ async def create_post(text: str = Form(...), media_refs: str = Form(None)):
                     <h3 class="font-semibold mb-2">✓ Post Created Successfully</h3>
                     <p class="text-sm">Post ID: {post.id}</p>
                     <p class="text-sm">Created at: {post.created_at.strftime('%Y-%m-%d %H:%M:%S')}</p>
+                    {schedule_info}
                 </div>
                 """
             )
@@ -145,10 +306,18 @@ async def create_post(text: str = Form(...), media_refs: str = Form(None)):
         )
 
 
-async def update_post(post_id: int, text: str = Form(...), media_refs: str = Form(None)):
-    """Update an existing post."""
+async def update_post(
+    post_id: int,
+    text: str = Form(...),
+    media_refs: str = Form(None),
+    schedule_type: str = Form("none"),
+    cron_expression: str = Form(None),
+    one_shot_datetime: str = Form(None),
+    schedule_timezone: str = Form(None)
+):
+    """Update an existing post and its schedule."""
     try:
-        logger.debug(f"update_post called with post_id: {post_id}, text length: {len(text)}")
+        logger.debug(f"update_post called with post_id: {post_id}, text length: {len(text)}, schedule_type: {schedule_type}")
         
         # Validate text
         if not text or len(text.strip()) == 0:
@@ -213,9 +382,34 @@ async def update_post(post_id: int, text: str = Form(...), media_refs: str = For
             post.text = text.strip()
             post.media_refs = json.dumps(media_data) if media_data else None
             post.updated_at = datetime.utcnow()
+            
+            # Update schedule if provided
+            schedule_updated = False
+            schedule_info = ""
+            try:
+                schedule = create_or_update_schedule(
+                    db=db,
+                    post_id=post_id,
+                    schedule_type=schedule_type,
+                    cron_expression=cron_expression if cron_expression else None,
+                    one_shot_datetime=one_shot_datetime if one_shot_datetime else None,
+                    timezone=schedule_timezone if schedule_timezone else None
+                )
+                if schedule:
+                    schedule_updated = True
+                    if schedule_type == "none":
+                        schedule_info = f"<p class='text-sm'>Schedule cleared (disabled)</p>"
+                    else:
+                        next_run_str = schedule.next_run_at.strftime('%Y-%m-%d %H:%M:%S UTC') if schedule.next_run_at else "N/A"
+                        schedule_info = f"<p class='text-sm'>Schedule: {schedule.kind}, Next run: {next_run_str}</p>"
+            except Exception as schedule_error:
+                logger.warning(f"Error updating schedule: {schedule_error}")
+                # Don't fail post update if schedule update fails
+                schedule_info = f"<p class='text-sm text-orange-600'>Warning: Could not update schedule: {schedule_error}</p>"
+            
             db.commit()
             
-            logger.info(f"Updated post with id: {post_id}")
+            logger.info(f"Updated post with id: {post_id}, schedule_updated: {schedule_updated}")
             log_info(
                 action="post_updated",
                 message=f"Updated post with id {post_id}",
@@ -223,7 +417,8 @@ async def update_post(post_id: int, text: str = Form(...), media_refs: str = For
                 extra_data=json.dumps({
                     "post_id": post_id,
                     "text_length": len(text),
-                    "has_media": media_data is not None
+                    "has_media": media_data is not None,
+                    "schedule_type": schedule_type if schedule_type != "none" else None
                 })
             )
             
@@ -234,6 +429,7 @@ async def update_post(post_id: int, text: str = Form(...), media_refs: str = For
                     <h3 class="font-semibold mb-2">✓ Post Updated Successfully</h3>
                     <p class="text-sm">Post ID: {post.id}</p>
                     <p class="text-sm">Updated at: {post.updated_at.strftime('%Y-%m-%d %H:%M:%S')}</p>
+                    {schedule_info}
                 </div>
                 """
             )
