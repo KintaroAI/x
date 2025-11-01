@@ -41,6 +41,7 @@ services:
       - X_CLIENT_SECRET=${X_CLIENT_SECRET}
       - X_REDIRECT_URI=${X_REDIRECT_URI}
       - ENVIRONMENT=${ENVIRONMENT:-dev}
+      - DEFAULT_TIMEZONE=${DEFAULT_TIMEZONE:-UTC}
     ports:
       - "${API_PORT:-8000}:8000"
     depends_on:

@@ -30,6 +30,7 @@ redis>=5.0.0
 
 # Settings
 pydantic-settings>=2.0.0
+python-dotenv>=1.0.0
 
 # Twitter API
 tweepy>=4.14.0

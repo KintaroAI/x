@@ -4,6 +4,8 @@ import json
 import logging
 from datetime import datetime, timedelta
 from typing import Optional
+import pytz
+
 from fastapi import Form
 from fastapi.responses import HTMLResponse, JSONResponse
 
@@ -64,19 +66,27 @@ def create_or_update_schedule(
             raise ValueError("one_shot_datetime is required for one_shot schedule")
         
         # Parse datetime string from form (datetime-local format: YYYY-MM-DDTHH:MM)
-        # Note: datetime-local doesn't include timezone, so we treat it as UTC
+        # datetime-local doesn't include timezone, so we interpret it in the default timezone
         try:
-            # Parse datetime-local format (YYYY-MM-DDTHH:MM)
-            dt = datetime.fromisoformat(one_shot_datetime)
-            if dt.tzinfo is None:
-                # Assume UTC if no timezone specified
-                dt = dt.replace(tzinfo=None)
-            else:
-                # Convert to UTC and remove timezone info
-                dt = dt.astimezone(tz=None).replace(tzinfo=None)
+            # Get default timezone
+            default_tz = get_default_timezone()
             
-            schedule_spec = dt.isoformat()
-            schedule_timezone = "UTC"
+            # Parse datetime-local format (YYYY-MM-DDTHH:MM) - this is naive
+            dt_naive = datetime.fromisoformat(one_shot_datetime)
+            if dt_naive.tzinfo is not None:
+                # Shouldn't happen with datetime-local, but handle it
+                dt_naive = dt_naive.replace(tzinfo=None)
+            
+            # Interpret the datetime in the default timezone
+            tz = pytz.timezone(default_tz)
+            dt_local = tz.localize(dt_naive)
+            
+            # Convert to UTC for storage (as naive UTC datetime)
+            dt_utc = dt_local.astimezone(pytz.UTC).replace(tzinfo=None)
+            
+            # Store as ISO string (in UTC) but remember the timezone
+            schedule_spec = dt_utc.isoformat()
+            schedule_timezone = default_tz
         except ValueError as e:
             raise ValueError(f"Invalid datetime format: {e}. Expected format: YYYY-MM-DDTHH:MM")
     

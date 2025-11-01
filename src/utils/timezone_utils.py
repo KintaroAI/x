@@ -4,18 +4,25 @@ import os
 import pytz
 from typing import Optional
 
-# Default timezone from environment variable
-DEFAULT_TIMEZONE = os.getenv("DEFAULT_TIMEZONE", "UTC")
+# Try to load environment variables from .env file if python-dotenv is available
+try:
+    from dotenv import load_dotenv
+    # Load .env file if it exists (only loads once, safe to call multiple times)
+    load_dotenv()
+except ImportError:
+    # dotenv not installed, rely on system environment variables
+    pass
 
 
 def get_default_timezone() -> str:
     """
     Get the default timezone from environment variable.
+    Reads from environment each time it's called to pick up runtime changes.
     
     Returns:
         Timezone string (e.g., "UTC", "America/New_York")
     """
-    return DEFAULT_TIMEZONE
+    return os.getenv("DEFAULT_TIMEZONE", "UTC")
 
 
 def get_timezone_list() -> list:
