@@ -183,19 +183,31 @@ async def create_twitter_post(text: str, media_ids: List[str] = None, dry_run: b
             logger.info(f"[DRY RUN] Would create post: {text[:50]}...")
             return {"data": {"id": "dry_run_123", "text": text}}
         
-        # Get OAuth2 credentials from environment
-        client_id = os.getenv("X_CLIENT_ID")
-        client_secret = os.getenv("X_CLIENT_SECRET")
+        # Get OAuth1 credentials from environment
+        # X_CLIENT_ID = Consumer Key (API Key)
+        # X_CLIENT_SECRET = Consumer Secret (API Secret)
+        consumer_key = os.getenv("X_CLIENT_ID")
+        consumer_secret = os.getenv("X_CLIENT_SECRET")
+        access_token = os.getenv("X_ACCESS_TOKEN")
+        access_token_secret = os.getenv("X_ACCESS_TOKEN_SECRET")
         
-        if not client_id or not client_secret:
-            logger.error("create_twitter_post: Twitter OAuth2 credentials not configured")
-            raise ValueError("Twitter OAuth2 credentials not configured (X_CLIENT_ID and X_CLIENT_SECRET required)")
+        if not all([consumer_key, consumer_secret, access_token, access_token_secret]):
+            missing = []
+            if not consumer_key: missing.append("X_CLIENT_ID")
+            if not consumer_secret: missing.append("X_CLIENT_SECRET")
+            if not access_token: missing.append("X_ACCESS_TOKEN")
+            if not access_token_secret: missing.append("X_ACCESS_TOKEN_SECRET")
+            logger.error(f"create_twitter_post: Missing OAuth1 credentials: {', '.join(missing)}")
+            raise ValueError(f"OAuth1 credentials not configured. Missing: {', '.join(missing)}")
         
-        # Get access token
-        access_token = await get_or_refresh_token("twitter", client_id, client_secret)
-        
-        # Create tweepy client
-        client = tweepy.Client(bearer_token=access_token)
+        # Create OAuth1 handler and Tweepy client
+        auth = tweepy.OAuth1UserHandler(
+            consumer_key=consumer_key,
+            consumer_secret=consumer_secret,
+            access_token=access_token,
+            access_token_secret=access_token_secret,
+        )
+        client = tweepy.Client(auth=auth, wait_on_rate_limit=True)
         
         # Create the post
         if media_ids:
