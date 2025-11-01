@@ -190,6 +190,16 @@ async def cleanup_orphaned_jobs_api():
     return cleanup_orphaned_jobs(timeout_minutes=5)
 
 
+@app.get("/api/config/default-timezone")
+async def get_default_timezone():
+    """Get default timezone from environment configuration."""
+    from src.utils.timezone_utils import get_default_timezone, get_timezone_list
+    return {
+        "default_timezone": get_default_timezone(),
+        "timezone_list": get_timezone_list()
+    }
+
+
 def main():
     """Main function."""
     import uvicorn

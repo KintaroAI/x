@@ -28,7 +28,17 @@ async def health_page(request: Request):
 
 async def create_post_page(request: Request):
     """Post creation page."""
-    return templates.TemplateResponse("create_post.html", {"request": request, "post": None, "is_edit": False})
+    from src.utils.timezone_utils import get_default_timezone
+    default_timezone = get_default_timezone()
+    return templates.TemplateResponse(
+        "create_post.html", 
+        {
+            "request": request, 
+            "post": None, 
+            "is_edit": False,
+            "default_timezone": default_timezone
+        }
+    )
 
 
 async def edit_post_page(request: Request, post_id: int):
@@ -44,9 +54,16 @@ async def edit_post_page(request: Request, post_id: int):
                 # Post not found or deleted - redirect to index
                 return RedirectResponse(url="/", status_code=302)
             
+            from src.utils.timezone_utils import get_default_timezone
+            default_timezone = get_default_timezone()
             return templates.TemplateResponse(
                 "create_post.html", 
-                {"request": request, "post": post, "is_edit": True}
+                {
+                    "request": request, 
+                    "post": post, 
+                    "is_edit": True,
+                    "default_timezone": default_timezone
+                }
             )
     except Exception as e:
         logger.error(f"Error loading edit post page: {str(e)}", exc_info=True)

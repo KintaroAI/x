@@ -11,6 +11,7 @@ from src.models import Post, Schedule
 from src.database import get_db
 from src.audit import log_info, log_error
 from src.services.scheduler_service import ScheduleResolver
+from src.utils.timezone_utils import get_default_timezone, format_datetime_with_timezone
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +85,7 @@ def create_or_update_schedule(
             raise ValueError("cron_expression is required for cron schedule")
         
         schedule_spec = cron_expression.strip()
-        schedule_timezone = timezone or "UTC"
+        schedule_timezone = timezone or get_default_timezone()
     
     # Create or update schedule
     if existing_schedule:
@@ -253,7 +254,10 @@ async def create_post(
                     )
                     if schedule:
                         schedule_created = True
-                        next_run_str = schedule.next_run_at.strftime('%Y-%m-%d %H:%M:%S UTC') if schedule.next_run_at else "N/A"
+                        if schedule.next_run_at:
+                            next_run_str = format_datetime_with_timezone(schedule.next_run_at, schedule.timezone)
+                        else:
+                            next_run_str = "N/A"
                         schedule_info = f"<p class='text-sm'>Schedule: {schedule.kind}, Next run: {next_run_str}</p>"
             except Exception as schedule_error:
                 logger.warning(f"Error creating schedule: {schedule_error}")
@@ -400,7 +404,10 @@ async def update_post(
                     if schedule_type == "none":
                         schedule_info = f"<p class='text-sm'>Schedule cleared (disabled)</p>"
                     else:
-                        next_run_str = schedule.next_run_at.strftime('%Y-%m-%d %H:%M:%S UTC') if schedule.next_run_at else "N/A"
+                        if schedule.next_run_at:
+                            next_run_str = format_datetime_with_timezone(schedule.next_run_at, schedule.timezone)
+                        else:
+                            next_run_str = "N/A"
                         schedule_info = f"<p class='text-sm'>Schedule: {schedule.kind}, Next run: {next_run_str}</p>"
             except Exception as schedule_error:
                 logger.warning(f"Error updating schedule: {schedule_error}")

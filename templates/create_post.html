@@ -100,14 +100,14 @@
                         id="schedule_timezone" 
                         name="schedule_timezone"
                         class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
-                        <option value="UTC">UTC</option>
-                        <option value="America/New_York">Eastern Time (ET)</option>
-                        <option value="America/Chicago">Central Time (CT)</option>
-                        <option value="America/Denver">Mountain Time (MT)</option>
-                        <option value="America/Los_Angeles">Pacific Time (PT)</option>
-                        <option value="Europe/London">London (GMT)</option>
-                        <option value="Europe/Paris">Paris (CET)</option>
-                        <option value="Asia/Tokyo">Tokyo (JST)</option>
+                        <option value="UTC" {% if default_timezone == 'UTC' %}selected{% endif %}>UTC</option>
+                        <option value="America/New_York" {% if default_timezone == 'America/New_York' %}selected{% endif %}>Eastern Time (ET)</option>
+                        <option value="America/Chicago" {% if default_timezone == 'America/Chicago' %}selected{% endif %}>Central Time (CT)</option>
+                        <option value="America/Denver" {% if default_timezone == 'America/Denver' %}selected{% endif %}>Mountain Time (MT)</option>
+                        <option value="America/Los_Angeles" {% if default_timezone == 'America/Los_Angeles' %}selected{% endif %}>Pacific Time (PT)</option>
+                        <option value="Europe/London" {% if default_timezone == 'Europe/London' %}selected{% endif %}>London (GMT)</option>
+                        <option value="Europe/Paris" {% if default_timezone == 'Europe/Paris' %}selected{% endif %}>Paris (CET)</option>
+                        <option value="Asia/Tokyo" {% if default_timezone == 'Asia/Tokyo' %}selected{% endif %}>Tokyo (JST)</option>
                     </select>
                     <p class="mt-2 text-sm text-gray-500">Timezone for the cron schedule</p>
                 </div>
@@ -183,6 +183,10 @@
     
     scheduleType.addEventListener('change', updateScheduleFields);
     
+    // Default timezone is set from server-side template variable
+    // Fallback to UTC if not provided
+    let defaultTimezone = '{{ default_timezone|default("UTC") }}';
+    
     // Load existing schedule data when editing (if post has schedules)
     {% if post %}
     (async function() {
@@ -209,7 +213,7 @@
                 } else if (schedule.kind === 'cron') {
                     scheduleType.value = 'cron';
                     document.getElementById('cron_expression').value = schedule.schedule_spec || '';
-                    document.getElementById('schedule_timezone').value = schedule.timezone || 'UTC';
+                    document.getElementById('schedule_timezone').value = schedule.timezone || defaultTimezone;
                 }
                 
                 updateScheduleFields();
