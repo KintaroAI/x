@@ -67,18 +67,21 @@ CREATE TABLE variant_selection_history (
     template_id INTEGER NOT NULL REFERENCES post_templates(id) ON DELETE CASCADE,
     variant_id INTEGER NOT NULL REFERENCES post_variants(id) ON DELETE CASCADE,
     selected_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    schedule_id INTEGER NOT NULL REFERENCES schedules(id) ON DELETE CASCADE,  -- For context
-    job_id INTEGER REFERENCES publish_jobs(id),  -- Optional: link to job
+    schedule_id INTEGER NOT NULL REFERENCES schedules(id) ON DELETE CASCADE,
+    job_id INTEGER NOT NULL REFERENCES publish_jobs(id) ON DELETE CASCADE,  -- Required: link to job
     
-    -- Index for efficient "recent selections" queries
-    CONSTRAINT idx_variant_selection_recent 
-        UNIQUE (template_id, variant_id, selected_at)
+    -- No unique constraint on (template_id, variant_id, selected_at) - allow duplicates
+    -- Instead, rely on UNIQUE(schedule_id, planned_at) on publish_jobs for deduplication
 );
 
 CREATE INDEX idx_variant_selection_template_date 
     ON variant_selection_history(template_id, selected_at DESC);
 CREATE INDEX idx_variant_selection_template_variant 
     ON variant_selection_history(template_id, variant_id);
+CREATE INDEX idx_variant_selection_schedule_date 
+    ON variant_selection_history(schedule_id, selected_at DESC);
+CREATE INDEX idx_variant_selection_job_id 
+    ON variant_selection_history(job_id);
 ```
 
 ### Modified Tables
@@ -90,7 +93,8 @@ Add `template_id` field. During migration, support both `post_id` (legacy) and `
 ALTER TABLE schedules 
     ADD COLUMN template_id INTEGER REFERENCES post_templates(id) ON DELETE CASCADE,
     ADD COLUMN selection_policy VARCHAR(50) DEFAULT 'RANDOM_UNIFORM',
-    ADD COLUMN no_repeat_window INTEGER DEFAULT 0;  -- N fires to exclude
+    ADD COLUMN no_repeat_window INTEGER DEFAULT 0,  -- N fires to exclude
+    ADD COLUMN no_repeat_scope VARCHAR(20) DEFAULT 'template';  -- 'template' or 'schedule'
 
 -- Make post_id nullable (or keep required for backwards compat during migration)
 -- During transition: post_id OR template_id must be set
@@ -113,8 +117,23 @@ ALTER TABLE publish_jobs
     ADD COLUMN selection_seed BIGINT,  -- Deterministic seed for reproducibility
     ADD COLUMN selected_at TIMESTAMP;  -- When selection occurred
 
+-- CRITICAL: Unique constraint to prevent duplicate jobs across workers
+-- This is the true deduplication guard (matches existing dedupe_key logic)
+CREATE UNIQUE INDEX idx_publish_jobs_schedule_planned 
+    ON publish_jobs(schedule_id, planned_at);
+
 CREATE INDEX idx_publish_jobs_variant_id ON publish_jobs(variant_id);
 CREATE INDEX idx_publish_jobs_selection_seed ON publish_jobs(selection_seed);
+```
+
+#### 3. `published_posts`
+Add `variant_id` field to track which variant was published (for metrics/analytics and bandit learning).
+
+```sql
+ALTER TABLE published_posts 
+    ADD COLUMN variant_id INTEGER REFERENCES post_variants(id) ON DELETE SET NULL;
+
+CREATE INDEX idx_published_posts_variant_id ON published_posts(variant_id);
 ```
 
 ---
@@ -177,8 +196,8 @@ class VariantSelectionHistory(Base):
     template_id = Column(Integer, ForeignKey("post_templates.id"), nullable=False, index=True)
     variant_id = Column(Integer, ForeignKey("post_variants.id"), nullable=False, index=True)
     selected_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
-    schedule_id = Column(Integer, ForeignKey("schedules.id"), nullable=False)
-    job_id = Column(Integer, ForeignKey("publish_jobs.id"), nullable=True)
+    schedule_id = Column(Integer, ForeignKey("schedules.id"), nullable=False, index=True)
+    job_id = Column(Integer, ForeignKey("publish_jobs.id"), nullable=False, index=True)  -- Required
     
     # Relationships
     template = relationship("PostTemplate")
@@ -201,6 +220,8 @@ class Schedule(Base):
     template_id = Column(Integer, ForeignKey("post_templates.id"), nullable=True, index=True)
     selection_policy = Column(String(50), default="RANDOM_UNIFORM", nullable=False)
     no_repeat_window = Column(Integer, default=0, nullable=False)
+    no_repeat_scope = Column(String(20), default="template", nullable=False)  -- 'template' or 'schedule'
+    last_variant_pos = Column(Integer, nullable=True)  -- For round-robin state tracking
     
     # Keep post_id for backwards compatibility (make nullable later if needed)
     # post_id = Column(Integer, ForeignKey("posts.id"), nullable=True)  # Eventually nullable
@@ -222,6 +243,17 @@ class PublishJob(Base):
     
     # Relationships
     variant = relationship("PostVariant", back_populates="publish_jobs")
+
+
+# PublishedPost model changes
+class PublishedPost(Base):
+    # ... existing fields ...
+    
+    # Add new field
+    variant_id = Column(Integer, ForeignKey("post_variants.id"), nullable=True, index=True)
+    
+    # Relationships
+    variant = relationship("PostVariant")  # Optional: link to variant
 ```
 
 ---
@@ -239,6 +271,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import List, Optional
 from sqlalchemy.orm import Session
+import pytz
 
 from src.models import PostVariant, VariantSelectionHistory, Schedule
 
@@ -296,8 +329,7 @@ class VariantSelector:
         # Apply no-repeat window filtering if enabled
         pool = self._apply_no_repeat_window(
             variants, 
-            schedule.template_id, 
-            schedule.no_repeat_window,
+            schedule,
             planned_at
         )
         
@@ -307,50 +339,63 @@ class VariantSelector:
             pool = variants
         
         # Select based on policy
-        selected = self._select_by_policy(pool, schedule.selection_policy, rng)
-        
-        if selected:
-            # Record selection history if no-repeat window is enabled
-            if schedule.no_repeat_window > 0:
-                self._record_selection(
-                    schedule.template_id,
-                    selected.id,
-                    schedule.id,
-                    planned_at
-                )
+        selected = self._select_by_policy(pool, schedule, rng)
         
         return selected
     
     def _generate_seed(self, schedule_id: int, planned_at: datetime) -> int:
-        """Generate deterministic seed from schedule_id and planned_at."""
-        seed_str = f"{schedule_id}:{planned_at.isoformat()}"
+        """Generate deterministic seed from schedule_id and planned_at.
+        
+        CRITICAL: Normalize planned_at to UTC to avoid DST/timezone drift affecting seed.
+        """
+        # Normalize to UTC (if naive, assume UTC)
+        if planned_at.tzinfo is None:
+            # Assume naive datetime is in UTC
+            planned_at_utc = pytz.UTC.localize(planned_at)
+        else:
+            planned_at_utc = planned_at.astimezone(pytz.UTC)
+        
+        seed_str = f"{schedule_id}:{planned_at_utc.isoformat()}"
         seed_bytes = hashlib.sha256(seed_str.encode()).digest()
         return int.from_bytes(seed_bytes[:8], "big")  # Use first 8 bytes for int64
     
     def _apply_no_repeat_window(
         self,
         variants: List[PostVariant],
-        template_id: int,
-        window_size: int,
+        schedule: Schedule,
         planned_at: datetime
     ) -> List[PostVariant]:
         """
         Filter variants that were recently used (no-repeat window).
         
+        Scope can be 'template' (across all schedules) or 'schedule' (per schedule only).
+        
         Returns list of variants that haven't been used in the last N fires.
         """
-        if window_size <= 0:
+        if schedule.no_repeat_window <= 0:
             return variants
         
-        # Get recent selections (last N selections for this template)
-        recent_selections = (
-            self.db.query(VariantSelectionHistory.variant_id)
-            .filter(
-                VariantSelectionHistory.template_id == template_id,
+        # Build query based on scope
+        query = self.db.query(VariantSelectionHistory.variant_id)
+        
+        if schedule.no_repeat_scope == 'schedule':
+            # Per-schedule scope: only exclude variants used by this specific schedule
+            query = query.filter(
+                VariantSelectionHistory.schedule_id == schedule.id,
                 VariantSelectionHistory.selected_at <= planned_at
             )
+        else:
+            # Template scope (default): exclude variants used by any schedule with this template
+            query = query.filter(
+                VariantSelectionHistory.template_id == schedule.template_id,
+                VariantSelectionHistory.selected_at <= planned_at
+            )
+        
+        # Get recent selections (last N selections)
+        recent_selections = (
+            query
             .order_by(VariantSelectionHistory.selected_at.desc())
-            .limit(window_size)
+            .limit(schedule.no_repeat_window)
             .all()
         )
         
@@ -362,42 +407,74 @@ class VariantSelector:
     def _select_by_policy(
         self,
         pool: List[PostVariant],
-        policy: str,
+        schedule: Schedule,
         rng: random.Random
     ) -> PostVariant:
         """Select variant based on policy."""
         if not pool:
             return None
         
+        policy = schedule.selection_policy
+        
         if policy == "RANDOM_WEIGHTED":
             weights = [v.weight for v in pool]
             return rng.choices(pool, weights=weights, k=1)[0]
         
         elif policy == "ROUND_ROBIN":
-            # For round-robin, we need to track the last selected variant
-            # Simple approach: use seed modulo to pick position
-            return pool[rng.randint(0, len(pool) - 1)]  # Deterministic via seed
+            # True round-robin: track last variant ID per schedule
+            # Sort variants by ID for stable ordering
+            sorted_pool = sorted(pool, key=lambda v: v.id)
+            n = len(sorted_pool)
+            
+            # Get last selected variant ID (if any)
+            last_variant_id = schedule.last_variant_pos
+            
+            # Find index of last variant in current pool
+            if last_variant_id is not None:
+                try:
+                    last_idx = next(i for i, v in enumerate(sorted_pool) if v.id == last_variant_id)
+                except StopIteration:
+                    # Last variant no longer in pool (deactivated), start from 0
+                    last_idx = -1
+            else:
+                # No previous selection, start from 0
+                last_idx = -1
+            
+            # Next position: (last_idx + 1) % n
+            next_idx = (last_idx + 1) % n
+            selected = sorted_pool[next_idx]
+            
+            # Update last_variant_pos (caller must persist in same transaction)
+            schedule.last_variant_pos = selected.id
+            
+            return selected
         
         elif policy == "NO_REPEAT_WINDOW":
-            # Already handled by _apply_no_repeat_window
+            # Selection already filtered by _apply_no_repeat_window
             return rng.choice(pool)
         
         elif policy == "RANDOM_UNIFORM":
         default:
             return rng.choice(pool)
     
-    def _record_selection(
+    def record_selection(
         self,
         template_id: int,
         variant_id: int,
         schedule_id: int,
+        job_id: int,
         selected_at: datetime
     ):
-        """Record variant selection in history."""
+        """Record variant selection in history.
+        
+        CRITICAL: Must be called AFTER job is created (so we have job_id).
+        This ensures history is linked to the job from the start.
+        """
         history = VariantSelectionHistory(
             template_id=template_id,
             variant_id=variant_id,
             schedule_id=schedule_id,
+            job_id=job_id,
             selected_at=selected_at
         )
         self.db.add(history)
@@ -413,9 +490,48 @@ class VariantSelector:
             )
             .all()
         )
+    
+    def validate_content_safety(
+        self,
+        variant: PostVariant,
+        recent_published: Optional[List[str]] = None
+    ) -> tuple[bool, Optional[str]]:
+        """
+        Validate variant content for safety:
+        - Check X character/word limits
+        - Check for near-duplicate content (if recent_published provided)
+        
+        Returns: (is_valid, error_message)
+        """
+        # Check X character limit (280 for text posts)
+        if len(variant.text) > 280:
+            return False, f"Text exceeds 280 characters: {len(variant.text)}"
+        
+        # Check for near-duplicate content
+        if recent_published:
+            import difflib
+            variant_hash = hashlib.md5(variant.text.encode()).hexdigest()
+            for recent_text in recent_published:
+                recent_hash = hashlib.md5(recent_text.encode()).hexdigest()
+                if variant_hash == recent_hash:
+                    return False, "Exact duplicate of recently published content"
+                
+                # Check similarity (configurable threshold)
+                similarity = difflib.SequenceMatcher(
+                    None, variant.text, recent_text
+                ).ratio()
+                if similarity > 0.9:  # 90% similarity threshold
+                    return False, f"Near-duplicate content (similarity: {similarity:.2%})"
+        
+        return True, None
 ```
 
-**Note on Round-Robin**: For true round-robin, we'd need to track the last selected position per template. For simplicity, we use deterministic seed-based selection. A more sophisticated implementation would query the last selection and cycle through variants.
+**Notes:**
+- **Round-Robin**: Implements true round-robin by tracking `last_variant_pos` per schedule. Variants are sorted by ID for stable ordering, and we cycle through them deterministically. If a variant is deactivated, we restart from position 0.
+- **Seed Generation**: Normalizes `planned_at` to UTC before generating seed to avoid DST/timezone drift affecting selection.
+- **No-Repeat Scope**: Supports both `'template'` (across all schedules) and `'schedule'` (per schedule only) scoping.
+- **History Recording**: History is recorded AFTER job creation (so `job_id` is available). All within the same transaction with schedule row locked.
+- **Content Safety**: `validate_content_safety()` method checks character limits and near-duplicate content. Called at selection time for lightweight validation, and optionally at publish time for full checks.
 
 ---
 
@@ -445,7 +561,8 @@ def scheduler_tick():
                     
                     # ... existing dedupe lock check ...
                     
-                    # VARIANT SELECTION (NEW)
+                    # VARIANT SELECTION (NEW) - All within the same transaction
+                    # Schedule row is already locked via WITH FOR UPDATE SKIP LOCKED
                     selected_variant = None
                     selection_seed = None
                     
@@ -469,7 +586,8 @@ def scheduler_tick():
                         )
                     # else: Legacy post_id schedule - handled in publish_post()
                     
-                    # Create publish job
+                    # Create publish job (atomic with selection above)
+                    # The UNIQUE constraint on (schedule_id, planned_at) prevents duplicates
                     job = PublishJob(
                         schedule_id=schedule.id,
                         planned_at=planned_at,
@@ -483,7 +601,17 @@ def scheduler_tick():
                         updated_at=datetime.utcnow()
                     )
                     db.add(job)
-                    db.flush()
+                    db.flush()  # Get job.id
+                    
+                    # Record selection history AFTER job creation (so we have job_id)
+                    if selected_variant and schedule.template_id and schedule.no_repeat_window > 0:
+                        variant_selector.record_selection(
+                            template_id=schedule.template_id,
+                            variant_id=selected_variant.id,
+                            schedule_id=schedule.id,
+                            job_id=job.id,  # Now available after flush
+                            selected_at=planned_at
+                        )
                     
                     # ... rest of existing code (enqueue, update schedule, etc.) ...
                     
@@ -542,13 +670,8 @@ def publish_post(job_id: str):
                 post_text = variant.text
                 media_refs = variant.media_refs
                 
-                # Update job's selection_history record if exists
-                if schedule.no_repeat_window > 0:
-                    history = db.query(VariantSelectionHistory).filter(
-                        VariantSelectionHistory.job_id == job.id
-                    ).first()
-                    if history:
-                        history.job_id = job.id
+                # Note: History is already created in scheduler_tick() with job_id,
+                # so no need to update it here
                 
             elif schedule.post_id:
                 # Legacy post-based schedule
@@ -574,18 +697,14 @@ def publish_post(job_id: str):
             if result.get("data", {}).get("id"):
                 x_post_id = result["data"]["id"]
                 
-                # For variant-based posts, we still need a Post record
-                # Option 1: Create Post on-the-fly for variant
-                # Option 2: PublishedPost references variant_id directly
-                # Option 3: Keep current PublishedPost.post_id (create/update Post)
-                
-                # RECOMMENDATION: Create Post record for variants too (for consistency)
-                # Or add variant_id to PublishedPost model
+                # For variant-based posts: PublishedPost.variant_id tracks which variant was published
+                # This enables metrics/analytics per variant
+                # post_id is kept for backwards compatibility (may be NULL for variant-only posts)
                 
                 # ... existing PublishedPost creation ...
 ```
 
-**Decision needed**: Should `PublishedPost` reference `variant_id` directly, or should we create a `Post` record for each variant selection? Recommendation: Add `variant_id` to `PublishedPost` for tracking, but keep `post_id` for backwards compatibility.
+**Note**: `PublishedPost` should have `variant_id` field added for tracking which variant was published. This enables metrics/analytics per variant and bandit learning. See Modified Tables section below.
 
 ---
 
@@ -741,8 +860,25 @@ async def update_schedule(
     schedule_id: int,
     template_id: Optional[int] = None,  # NEW
     selection_policy: Optional[str] = None,  # NEW
-    no_repeat_window: Optional[int] = None  # NEW
+    no_repeat_window: Optional[int] = None,  # NEW
+    no_repeat_scope: Optional[str] = None  # NEW
 )
+
+# GET /api/schedules/{schedule_id}/preview
+async def preview_variant_selection(
+    schedule_id: int,
+    planned_at: Optional[str] = None  # ISO datetime string, defaults to next_run_at
+) -> dict:
+    """
+    Preview which variant would be selected for a given planned_at time.
+    Uses the same seed generation and selection logic as scheduler_tick().
+    Returns: {
+        "variant_id": int,
+        "variant_text": str,
+        "selection_seed": int,
+        "planned_at": str
+    }
+    """
 ```
 
 ### Modified Endpoints
@@ -859,9 +995,13 @@ else:
 - Retries use the same `variant_id` (no re-selection)
 
 ### Performance
-- No-repeat window queries use indexes (template_id, selected_at DESC)
-- Consider Redis caching for recent selections if history table grows large
+- No-repeat window queries use indexes (template_id, selected_at DESC) or (schedule_id, selected_at DESC)
+- **Redis caching for hot paths**: Cache recent N selections per template/schedule in Redis to make no-repeat filter O(1)
+  - Key: `variant_selections:template:{template_id}` or `variant_selections:schedule:{schedule_id}`
+  - Value: Set of variant_ids (use Redis SET with TTL or capped list)
+  - Update cache after each selection, expire after window_size * average_interval
 - Variant selection is O(n) where n = number of active variants (typically small)
+- History table cleanup: Periodically prune old history beyond retention window
 
 ### Data Migration
 - Optional: Auto-convert existing `Post` + `Schedule` to `PostTemplate` + `PostVariant`
@@ -875,20 +1015,23 @@ else:
 
 ## Questions to Resolve
 
-1. **PublishedPost.variant_id**: Should we add this field to track which variant was published?
-   - **Recommendation**: Yes, for metrics/analytics
+1. ~~**PublishedPost.variant_id**: Should we add this field to track which variant was published?~~
+   - **Resolution**: Yes, added to schema. Enables metrics/analytics per variant and bandit learning.
 
-2. **Post record for variants**: Should each variant publish create a `Post` record?
-   - **Recommendation**: Optionally, or just use `variant_id` in `PublishedPost`
+2. ~~**Post record for variants**: Should each variant publish create a `Post` record?~~
+   - **Resolution**: No, `PublishedPost.variant_id` directly tracks variant. `post_id` remains for backwards compatibility (may be NULL).
 
-3. **Round-robin implementation**: True stateful round-robin or seed-based?
-   - **Recommendation**: Start with seed-based (simpler), add stateful later if needed
+3. ~~**Round-robin implementation**: True stateful round-robin or seed-based?~~
+   - **Resolution**: True stateful round-robin using `schedule.last_variant_pos`. Tracks last variant ID per schedule.
 
 4. **Template deletion**: Cascade delete variants, or soft delete?
    - **Recommendation**: Cascade delete (current plan), but warn if schedules exist
 
 5. **Migration strategy**: Auto-migrate existing posts or manual?
    - **Recommendation**: Provide script, let users decide
+
+6. **Content safety checks**: Should validation happen at selection time or publish time?
+   - **Recommendation**: Both - lightweight check at selection (length), full validation at publish time (duplicates)
 
 ---
 
