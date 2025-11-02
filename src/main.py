@@ -135,11 +135,18 @@ async def create_post(
     schedule_type: str = Form("none"),
     cron_expression: str = Form(None),
     one_shot_datetime: str = Form(None),
+    rrule_expression: str = Form(None),
     schedule_timezone: str = Form(None)
 ):
     """Create a new post (draft) with optional schedule."""
     return await posts.create_post(
-        text, media_refs, schedule_type, cron_expression, one_shot_datetime, schedule_timezone
+        text=text,
+        media_refs=media_refs,
+        schedule_type=schedule_type,
+        cron_expression=cron_expression,
+        one_shot_datetime=one_shot_datetime,
+        rrule_expression=rrule_expression,
+        schedule_timezone=schedule_timezone
     )
 
 
@@ -151,11 +158,19 @@ async def update_post(
     schedule_type: str = Form("none"),
     cron_expression: str = Form(None),
     one_shot_datetime: str = Form(None),
+    rrule_expression: str = Form(None),
     schedule_timezone: str = Form(None)
 ):
     """Update an existing post and its schedule."""
     return await posts.update_post(
-        post_id, text, media_refs, schedule_type, cron_expression, one_shot_datetime, schedule_timezone
+        post_id=post_id,
+        text=text,
+        media_refs=media_refs,
+        schedule_type=schedule_type,
+        cron_expression=cron_expression,
+        one_shot_datetime=one_shot_datetime,
+        rrule_expression=rrule_expression,
+        schedule_timezone=schedule_timezone
     )
 
 
