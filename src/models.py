@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean, ForeignKey
+from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean, ForeignKey, BigInteger
 from sqlalchemy.dialects.postgresql import JSON
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
@@ -85,13 +85,83 @@ class Post(Base):
         return f"<Post(id={self.id}, text={self.text[:50]}...)>"
 
 
+class PostTemplate(Base):
+    """Model for grouping post variants."""
+
+    __tablename__ = "post_templates"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    created_by = Column(String(100), nullable=True)
+    active = Column(Boolean, default=True, nullable=False, index=True)
+
+    # Relationships
+    variants = relationship("PostVariant", back_populates="template", cascade="all, delete-orphan")
+    schedules = relationship("Schedule", back_populates="template")
+
+    def __repr__(self):
+        return f"<PostTemplate(id={self.id}, name={self.name})>"
+
+
+class PostVariant(Base):
+    """Model for individual post text variants."""
+
+    __tablename__ = "post_variants"
+
+    id = Column(Integer, primary_key=True, index=True)
+    template_id = Column(Integer, ForeignKey("post_templates.id"), nullable=False, index=True)
+    text = Column(Text, nullable=False)  # The actual post text
+    weight = Column(Integer, default=1, nullable=False)  # For weighted selection
+    active = Column(Boolean, default=True, nullable=False, index=True)  # Can disable individual variants
+    media_refs = Column(Text, nullable=True)  # JSON array (same format as Post.media_refs)
+    locale = Column(String(10), nullable=True)  # Optional: for future i18n
+    tags = Column(Text, nullable=True)  # Optional: comma-separated tags for filtering
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    created_by = Column(String(100), nullable=True)  # Optional: user tracking
+
+    # Relationships
+    template = relationship("PostTemplate", back_populates="variants")
+    publish_jobs = relationship("PublishJob", back_populates="variant")
+    selection_history = relationship("VariantSelectionHistory", back_populates="variant")
+
+    def __repr__(self):
+        return f"<PostVariant(id={self.id}, template_id={self.template_id}, text={self.text[:50]}...)>"
+
+
+class VariantSelectionHistory(Base):
+    """Model for tracking variant selection history (no-repeat window)."""
+
+    __tablename__ = "variant_selection_history"
+
+    id = Column(Integer, primary_key=True, index=True)
+    template_id = Column(Integer, ForeignKey("post_templates.id"), nullable=False, index=True)
+    variant_id = Column(Integer, ForeignKey("post_variants.id"), nullable=False, index=True)
+    planned_at = Column(DateTime, nullable=False, index=True)  # When this selection was planned
+    selected_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)  # When history was recorded
+    schedule_id = Column(Integer, ForeignKey("schedules.id"), nullable=False, index=True)
+    job_id = Column(Integer, ForeignKey("publish_jobs.id"), nullable=False, index=True)  # Required: link to job
+
+    # Relationships
+    template = relationship("PostTemplate")
+    variant = relationship("PostVariant", back_populates="selection_history")
+    schedule = relationship("Schedule")
+    job = relationship("PublishJob")
+
+    def __repr__(self):
+        return f"<VariantSelectionHistory(template_id={self.template_id}, variant_id={self.variant_id})>"
+
+
 class Schedule(Base):
     """Model for one-off or recurring post schedules."""
 
     __tablename__ = "schedules"
 
     id = Column(Integer, primary_key=True, index=True)
-    post_id = Column(Integer, ForeignKey("posts.id"), nullable=False)
+    post_id = Column(Integer, ForeignKey("posts.id"), nullable=True)  # Made nullable for template-based schedules
     kind = Column(String(50), nullable=False)  # 'one_shot', 'cron', 'rrule'
     schedule_spec = Column(Text, nullable=False)  # Cron string, RRULE, or ISO datetime for one_shot
     timezone = Column(String(100), nullable=True, default="UTC")
@@ -100,13 +170,21 @@ class Schedule(Base):
     enabled = Column(Boolean, default=True, nullable=False, index=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    
+    # Variant selection fields
+    template_id = Column(Integer, ForeignKey("post_templates.id"), nullable=True, index=True)
+    selection_policy = Column(String(50), default="RANDOM_UNIFORM", nullable=False)
+    no_repeat_window = Column(Integer, default=0, nullable=False)
+    no_repeat_scope = Column(String(20), default="template", nullable=False)  # 'template' or 'schedule'
+    last_variant_pos = Column(Integer, nullable=True)  # For round-robin state tracking
 
     # Relationships
     post = relationship("Post", back_populates="schedules")
+    template = relationship("PostTemplate", back_populates="schedules")
     publish_jobs = relationship("PublishJob", back_populates="schedule")
 
     def __repr__(self):
-        return f"<Schedule(id={self.id}, post_id={self.post_id}, kind={self.kind}, enabled={self.enabled})>"
+        return f"<Schedule(id={self.id}, post_id={self.post_id}, template_id={self.template_id}, kind={self.kind}, enabled={self.enabled})>"
 
 
 class PublishJob(Base):
@@ -126,12 +204,19 @@ class PublishJob(Base):
     dedupe_key = Column(String(200), nullable=True, unique=True)  # For idempotency
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    
+    # Variant selection fields
+    variant_id = Column(Integer, ForeignKey("post_variants.id"), nullable=True, index=True)
+    selection_policy = Column(String(50), nullable=True)  # Copy from schedule for audit
+    selection_seed = Column(BigInteger, nullable=True, index=True)  # Deterministic seed for reproducibility
+    selected_at = Column(DateTime, nullable=True)  # When selection occurred
 
     # Relationships
     schedule = relationship("Schedule", back_populates="publish_jobs")
+    variant = relationship("PostVariant", back_populates="publish_jobs")
 
     def __repr__(self):
-        return f"<PublishJob(id={self.id}, schedule_id={self.schedule_id}, status={self.status})>"
+        return f"<PublishJob(id={self.id}, schedule_id={self.schedule_id}, variant_id={self.variant_id}, status={self.status})>"
 
 
 class PublishedPost(Base):
@@ -140,17 +225,21 @@ class PublishedPost(Base):
     __tablename__ = "published_posts"
 
     id = Column(Integer, primary_key=True, index=True)
-    post_id = Column(Integer, ForeignKey("posts.id"), nullable=False)
+    post_id = Column(Integer, ForeignKey("posts.id"), nullable=True)  # Made nullable for variant-only posts
     x_post_id = Column(String(100), nullable=False, unique=True, index=True)  # X/Twitter post ID
     published_at = Column(DateTime, nullable=False, index=True)
     url = Column(String(500), nullable=True)  # Full URL to the post on X
+    
+    # Variant tracking field
+    variant_id = Column(Integer, ForeignKey("post_variants.id"), nullable=True, index=True)
 
     # Relationships
     post = relationship("Post", back_populates="published_posts")
+    variant = relationship("PostVariant")  # Optional: link to variant
     metrics_snapshots = relationship("MetricsSnapshot", back_populates="published_post")
 
     def __repr__(self):
-        return f"<PublishedPost(id={self.id}, post_id={self.post_id}, x_post_id={self.x_post_id})>"
+        return f"<PublishedPost(id={self.id}, post_id={self.post_id}, variant_id={self.variant_id}, x_post_id={self.x_post_id})>"
 
 
 class MetricsSnapshot(Base):
