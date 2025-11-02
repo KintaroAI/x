@@ -60,9 +60,91 @@ class ScheduleResolver:
             # Get timezone, default to UTC
             tz = pytz.timezone(schedule.timezone or "UTC")
             
-            # Create croniter with current time in the schedule's timezone
-            now_tz = datetime.now(tz)
-            cron = croniter(schedule.schedule_spec, now_tz)
+            # Use last_run_at if available, otherwise use current time
+            # This ensures we calculate the next occurrence after the last run,
+            # and avoids DST transition issues by using the actual execution time
+            if schedule.last_run_at:
+                # Convert last_run_at (stored as naive UTC) to the schedule's timezone
+                reference_utc = pytz.UTC.localize(schedule.last_run_at) if schedule.last_run_at.tzinfo is None else schedule.last_run_at
+                reference_tz = reference_utc.astimezone(tz)
+            else:
+                # No last_run_at yet (initial resolution), use current time
+                reference_tz = datetime.now(tz)
+                
+                # Check if there's an upcoming DST transition that might affect the calculation
+                # If we're in DST and the next occurrence might be after DST ends (or vice versa),
+                # we should use a reference time after the DST transition to get the correct calculation
+                try:
+                    # Calculate a tentative next run to detect DST transitions
+                    temp_cron = croniter(schedule.schedule_spec, reference_tz)
+                    temp_next = temp_cron.get_next(datetime)
+                    
+                    # Check if there's a DST transition between reference time and next occurrence
+                    if reference_tz.dst() != temp_next.dst():
+                        # DST transition detected between reference and next occurrence
+                        # The temp_next was calculated using the pre-transition timezone, so it may be incorrect
+                        # Recalculate using a time after the DST transition to get the correct result
+                        
+                        # Parse scheduled time from cron spec to check for special cases
+                        cron_parts = schedule.schedule_spec.split()
+                        scheduled_hour = int(cron_parts[1]) if cron_parts[1] != '*' else None
+                        scheduled_minute = int(cron_parts[0]) if cron_parts[0] != '*' else None
+                        
+                        # Determine which direction the DST transition is going
+                        is_fall_back = reference_tz.dst() and not temp_next.dst()  # CDT -> CST
+                        is_spring_forward = not reference_tz.dst() and temp_next.dst()  # CST -> CDT
+                        
+                        # Determine the transition date
+                        # temp_next might have the wrong date due to timezone calculation issues,
+                        # so we'll use the reference time's date and check if it's the transition day,
+                        # or use temp_next's date if it's clearly on the transition day
+                        # For simplicity, use temp_next's date but construct the time properly
+                        transition_date = temp_next.date()
+                        
+                        # Also check if the reference time is already on or near the transition day
+                        ref_date = reference_tz.date()
+                        # If temp_next is clearly in the future by a day or more, the transition is tomorrow
+                        # Otherwise, it's today
+                        if temp_next.date() > ref_date + timedelta(days=1):
+                            transition_date = ref_date + timedelta(days=1)
+                        
+                        # Special handling: If the scheduled time is at 3 AM on the transition day,
+                        # we need to use a reference time just before 3 AM to avoid skipping it.
+                        if scheduled_hour == 3:
+                            # Schedule is at 3 AM on transition day - use 2:59:59 AM to avoid skipping
+                            if is_fall_back:
+                                # Post-transition is CST - use 2:59:59 AM CST
+                                transition_time = tz.localize(
+                                    datetime(transition_date.year, transition_date.month, transition_date.day, 2, 59, 59),
+                                    is_dst=False  # CST (no DST)
+                                )
+                            else:  # spring forward
+                                # Post-transition is CDT, but we want a reference before 3 AM CDT
+                                # Use 1:59:59 AM CST (just before 2 AM CST when transition happens)
+                                transition_time = tz.localize(
+                                    datetime(transition_date.year, transition_date.month, transition_date.day, 1, 59, 59),
+                                    is_dst=False  # CST (pre-transition)
+                                )
+                        else:
+                            # Use 3 AM on the transition day as a safe reference time
+                            # (after DST ends in fall, safe time in spring)
+                            transition_time = tz.localize(
+                                datetime(transition_date.year, transition_date.month, transition_date.day, 3, 0, 0),
+                                is_dst=False if is_fall_back else True  # CST for fall back, CDT for spring forward
+                            )
+                        
+                        # Ensure we're moving forward in time
+                        if transition_time > reference_tz:
+                            reference_tz = transition_time
+                            transition_type = "fall back" if is_fall_back else "spring forward"
+                            logger.debug(f"Schedule {schedule.id}: DST transition detected ({transition_type}), "
+                                       f"using post-transition time as reference for initial resolution")
+                except Exception as e:
+                    # If there's any issue with DST detection, continue with original reference
+                    logger.debug(f"Schedule {schedule.id}: Could not check DST transition, using original reference: {e}")
+            
+            # Create croniter with reference time in the schedule's timezone
+            cron = croniter(schedule.schedule_spec, reference_tz)
             
             # Get next run time
             next_run = cron.get_next(datetime)
