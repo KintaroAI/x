@@ -54,6 +54,7 @@
                         <option value="none">No Schedule</option>
                         <option value="one_shot">One-Time (Specific Date/Time)</option>
                         <option value="cron">Recurring (Cron Expression)</option>
+                        <option value="rrule">Recurring (RRULE/iCal)</option>
                     </select>
                 </div>
                 
@@ -91,10 +92,32 @@
                     </p>
                 </div>
                 
-                <!-- Timezone Field (for cron) -->
+                <!-- RRULE Schedule Fields -->
+                <div id="rrule_fields" class="mb-4 hidden">
+                    <label for="rrule_expression" class="block text-sm font-medium text-gray-700 mb-2">
+                        RRULE Expression
+                        <span class="text-gray-500 text-xs">(iCal recurrence rule)</span>
+                    </label>
+                    <input 
+                        type="text" 
+                        id="rrule_expression" 
+                        name="rrule_expression"
+                        placeholder="FREQ=DAILY;INTERVAL=1"
+                        class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono text-sm"
+                    >
+                    <p class="mt-2 text-sm text-gray-500">
+                        Examples: 
+                        <code class="bg-gray-100 px-1 rounded">FREQ=DAILY;INTERVAL=1</code> (daily),
+                        <code class="bg-gray-100 px-1 rounded">FREQ=WEEKLY;BYDAY=MO,WE,FR</code> (Mon/Wed/Fri),
+                        <code class="bg-gray-100 px-1 rounded">FREQ=MONTHLY;BYMONTHDAY=1</code> (1st of month)
+                    </p>
+                </div>
+                
+                <!-- Timezone Field (for cron and rrule) -->
                 <div id="timezone_fields" class="mb-4 hidden">
                     <label for="schedule_timezone" class="block text-sm font-medium text-gray-700 mb-2">
                         Timezone
+                        <span class="text-gray-500 text-xs">(for cron and rrule schedules)</span>
                     </label>
                     <select 
                         id="schedule_timezone" 
@@ -109,7 +132,7 @@
                         <option value="Europe/Paris" {% if default_timezone == 'Europe/Paris' %}selected{% endif %}>Paris (CET)</option>
                         <option value="Asia/Tokyo" {% if default_timezone == 'Asia/Tokyo' %}selected{% endif %}>Tokyo (JST)</option>
                     </select>
-                    <p class="mt-2 text-sm text-gray-500">Timezone for the cron schedule</p>
+                    <p class="mt-2 text-sm text-gray-500">Timezone for the cron and rrule schedules</p>
                 </div>
             </div>
             
@@ -162,6 +185,7 @@
     const scheduleType = document.getElementById('schedule_type');
     const oneShotFields = document.getElementById('one_shot_fields');
     const cronFields = document.getElementById('cron_fields');
+    const rruleFields = document.getElementById('rrule_fields');
     const timezoneFields = document.getElementById('timezone_fields');
     
     function updateScheduleFields() {
@@ -170,6 +194,7 @@
         // Hide all fields first
         oneShotFields.classList.add('hidden');
         cronFields.classList.add('hidden');
+        rruleFields.classList.add('hidden');
         timezoneFields.classList.add('hidden');
         
         // Show relevant fields based on type
@@ -177,6 +202,9 @@
             oneShotFields.classList.remove('hidden');
         } else if (type === 'cron') {
             cronFields.classList.remove('hidden');
+            timezoneFields.classList.remove('hidden');
+        } else if (type === 'rrule') {
+            rruleFields.classList.remove('hidden');
             timezoneFields.classList.remove('hidden');
         }
     }
@@ -245,6 +273,10 @@
                 } else if (schedule.kind === 'cron') {
                     scheduleType.value = 'cron';
                     document.getElementById('cron_expression').value = schedule.schedule_spec || '';
+                    document.getElementById('schedule_timezone').value = schedule.timezone || defaultTimezone;
+                } else if (schedule.kind === 'rrule') {
+                    scheduleType.value = 'rrule';
+                    document.getElementById('rrule_expression').value = schedule.schedule_spec || '';
                     document.getElementById('schedule_timezone').value = schedule.timezone || defaultTimezone;
                 }
                 

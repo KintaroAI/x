@@ -24,6 +24,7 @@ def create_or_update_schedule(
     schedule_type: Optional[str] = None,
     cron_expression: Optional[str] = None,
     one_shot_datetime: Optional[str] = None,
+    rrule_expression: Optional[str] = None,
     timezone: Optional[str] = None
 ) -> Optional[Schedule]:
     """
@@ -32,10 +33,11 @@ def create_or_update_schedule(
     Args:
         db: Database session
         post_id: ID of the post
-        schedule_type: 'none', 'one_shot', or 'cron'
+        schedule_type: 'none', 'one_shot', 'cron', or 'rrule'
         cron_expression: Cron expression string (for cron type)
         one_shot_datetime: ISO datetime string (for one_shot type)
-        timezone: Timezone string (for cron type)
+        rrule_expression: RRULE string (for rrule type, e.g., "FREQ=DAILY;INTERVAL=1")
+        timezone: Timezone string (for cron and rrule types)
     
     Returns:
         Schedule instance if created/updated, None if cleared
@@ -55,7 +57,7 @@ def create_or_update_schedule(
         return None
     
     # Validate schedule type
-    if schedule_type not in ["one_shot", "cron"]:
+    if schedule_type not in ["one_shot", "cron", "rrule"]:
         raise ValueError(f"Invalid schedule_type: {schedule_type}")
     
     resolver = ScheduleResolver()
@@ -95,6 +97,13 @@ def create_or_update_schedule(
             raise ValueError("cron_expression is required for cron schedule")
         
         schedule_spec = cron_expression.strip()
+        schedule_timezone = timezone or get_default_timezone()
+    
+    elif schedule_type == "rrule":
+        if not rrule_expression:
+            raise ValueError("rrule_expression is required for rrule schedule")
+        
+        schedule_spec = rrule_expression.strip()
         schedule_timezone = timezone or get_default_timezone()
     
     # Create or update schedule
@@ -200,6 +209,7 @@ async def create_post(
     schedule_type: str = Form("none"),
     cron_expression: str = Form(None),
     one_shot_datetime: str = Form(None),
+    rrule_expression: str = Form(None),
     schedule_timezone: str = Form(None)
 ):
     """Create a new post (draft) with optional schedule."""
@@ -260,6 +270,7 @@ async def create_post(
                         schedule_type=schedule_type,
                         cron_expression=cron_expression if cron_expression else None,
                         one_shot_datetime=one_shot_datetime if one_shot_datetime else None,
+                        rrule_expression=rrule_expression if rrule_expression else None,
                         timezone=schedule_timezone if schedule_timezone else None
                     )
                     if schedule:
@@ -327,6 +338,7 @@ async def update_post(
     schedule_type: str = Form("none"),
     cron_expression: str = Form(None),
     one_shot_datetime: str = Form(None),
+    rrule_expression: str = Form(None),
     schedule_timezone: str = Form(None)
 ):
     """Update an existing post and its schedule."""
@@ -407,6 +419,7 @@ async def update_post(
                     schedule_type=schedule_type,
                     cron_expression=cron_expression if cron_expression else None,
                     one_shot_datetime=one_shot_datetime if one_shot_datetime else None,
+                    rrule_expression=rrule_expression if rrule_expression else None,
                     timezone=schedule_timezone if schedule_timezone else None
                 )
                 if schedule:
