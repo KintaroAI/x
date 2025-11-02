@@ -140,3 +140,175 @@ class TestSchedulerIntegration:
         test_db.delete(schedule)
         test_db.delete(post)
         test_db.commit()
+    
+    def test_schedule_resolver_rrule_with_real_db(self, test_db):
+        """Test RRULE schedule resolver with real database."""
+        resolver = ScheduleResolver()
+        
+        # Create a test post
+        post = Post(
+            text="RRULE integration test post",
+            media_refs=None,
+            deleted=False,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow()
+        )
+        test_db.add(post)
+        test_db.flush()
+        
+        # Create a daily RRULE schedule
+        schedule = Schedule(
+            post_id=post.id,
+            kind="rrule",
+            schedule_spec="FREQ=DAILY;INTERVAL=1",
+            timezone="UTC",
+            next_run_at=None,
+            enabled=True,
+            created_at=datetime.utcnow() - timedelta(days=1),
+            updated_at=datetime.utcnow()
+        )
+        test_db.add(schedule)
+        test_db.flush()
+        
+        # Test resolver
+        result = resolver.resolve_schedule(schedule)
+        assert result is not None
+        assert isinstance(result, datetime)
+        assert result > datetime.utcnow()
+        assert result <= datetime.utcnow() + timedelta(days=1)
+        
+        # Clean up
+        test_db.delete(schedule)
+        test_db.delete(post)
+        test_db.commit()
+    
+    def test_schedule_resolver_rrule_weekly_with_real_db(self, test_db):
+        """Test weekly RRULE schedule resolver with real database."""
+        resolver = ScheduleResolver()
+        
+        # Create a test post
+        post = Post(
+            text="Weekly RRULE integration test post",
+            media_refs=None,
+            deleted=False,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow()
+        )
+        test_db.add(post)
+        test_db.flush()
+        
+        # Create a weekly RRULE schedule (Monday, Wednesday, Friday)
+        schedule = Schedule(
+            post_id=post.id,
+            kind="rrule",
+            schedule_spec="FREQ=WEEKLY;BYDAY=MO,WE,FR",
+            timezone="UTC",
+            next_run_at=None,
+            enabled=True,
+            created_at=datetime.utcnow() - timedelta(days=7),
+            updated_at=datetime.utcnow()
+        )
+        test_db.add(schedule)
+        test_db.flush()
+        
+        # Test resolver
+        result = resolver.resolve_schedule(schedule)
+        assert result is not None
+        assert isinstance(result, datetime)
+        assert result > datetime.utcnow()
+        
+        # Clean up
+        test_db.delete(schedule)
+        test_db.delete(post)
+        test_db.commit()
+    
+    def test_schedule_resolver_rrule_with_time_constraints(self, test_db):
+        """Test RRULE schedule with time constraints (BYHOUR/BYMINUTE) with real database."""
+        resolver = ScheduleResolver()
+        
+        # Create a test post
+        post = Post(
+            text="RRULE time constraints test post",
+            media_refs=None,
+            deleted=False,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow()
+        )
+        test_db.add(post)
+        test_db.flush()
+        
+        # Create a daily RRULE schedule at 9 AM
+        schedule = Schedule(
+            post_id=post.id,
+            kind="rrule",
+            schedule_spec="FREQ=DAILY;BYHOUR=9;BYMINUTE=0",
+            timezone="UTC",
+            next_run_at=None,
+            enabled=True,
+            created_at=datetime.utcnow() - timedelta(days=1),
+            updated_at=datetime.utcnow()
+        )
+        test_db.add(schedule)
+        test_db.flush()
+        
+        # Test resolver
+        result = resolver.resolve_schedule(schedule)
+        assert result is not None
+        assert isinstance(result, datetime)
+        assert result > datetime.utcnow()
+        # Verify hour is 9 (in UTC)
+        assert result.hour == 9
+        assert result.minute == 0
+        
+        # Clean up
+        test_db.delete(schedule)
+        test_db.delete(post)
+        test_db.commit()
+    
+    def test_schedule_resolver_rrule_with_count_limit(self, test_db):
+        """Test RRULE schedule with COUNT limit with real database."""
+        resolver = ScheduleResolver()
+        
+        # Create a test post
+        post = Post(
+            text="RRULE COUNT limit test post",
+            media_refs=None,
+            deleted=False,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow()
+        )
+        test_db.add(post)
+        test_db.flush()
+        
+        # Create a daily RRULE schedule with COUNT=3
+        schedule = Schedule(
+            post_id=post.id,
+            kind="rrule",
+            schedule_spec="FREQ=DAILY;INTERVAL=1;COUNT=3",
+            timezone="UTC",
+            next_run_at=None,
+            enabled=True,
+            created_at=datetime.utcnow() - timedelta(days=5),  # 5 days ago
+            updated_at=datetime.utcnow()
+        )
+        test_db.add(schedule)
+        test_db.flush()
+        
+        # Get first 3 occurrences (should work)
+        for i in range(3):
+            result = resolver.resolve_schedule(schedule)
+            if result:
+                # Update last_run_at to simulate execution
+                schedule.last_run_at = result
+                test_db.commit()
+            else:
+                break
+        
+        # After COUNT is exhausted, should return None
+        result = resolver.resolve_schedule(schedule)
+        assert result is None
+        
+        # Clean up
+        test_db.delete(schedule)
+        test_db.delete(post)
+        test_db.commit()

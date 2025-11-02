@@ -1,4 +1,4 @@
-.PHONY: help dev prod up down logs logs-api clean migrate init-db migrate-create migrate-create-simple shell-db update-db build build-api build-worker test coverage shell-api shell-worker
+.PHONY: help dev prod up down logs logs-api clean migrate init-db migrate-create migrate-create-simple shell-db update-db build build-api build-worker test test-rrule test-scheduler coverage shell-api shell-worker
 
 help:
 	@echo "Available commands:"
@@ -22,6 +22,8 @@ help:
 	@echo ""
 	@echo "Testing commands:"
 	@echo "  make test            - Run all tests"
+	@echo "  make test-rrule      - Run RRULE-specific tests"
+	@echo "  make test-scheduler  - Run scheduler service tests"
 	@echo "  make coverage        - Run tests with coverage report"
 
 dev:
@@ -107,6 +109,14 @@ build-worker:
 test:
 	@echo "Running all tests..."
 	docker compose exec api pytest tests/ -v
+
+test-rrule:
+	@echo "Running RRULE-specific tests..."
+	docker compose exec api pytest tests/test_scheduler_service.py -k "rrule" -v
+
+test-scheduler:
+	@echo "Running scheduler service tests..."
+	docker compose exec api pytest tests/test_scheduler_service.py -v
 
 coverage:
 	@echo "Running tests with coverage..."
