@@ -168,6 +168,34 @@ async def health_html():
     return HTMLResponse("<p class='text-green-600 font-semibold'>✓ Server is healthy</p>")
 
 
+async def calendar_page(request: Request):
+    """Calendar view page showing weekly schedule."""
+    try:
+        from src.utils.timezone_utils import get_default_timezone
+        
+        # Get query parameters
+        week_start = request.query_params.get('week_start', None)
+        timezone = request.query_params.get('timezone', None)
+        locale = request.query_params.get('locale', 'monday')
+        
+        # Default timezone
+        if timezone is None:
+            timezone = get_default_timezone()
+        
+        return templates.TemplateResponse(
+            "calendar.html",
+            {
+                "request": request,
+                "week_start": week_start,
+                "timezone": timezone,
+                "locale": locale
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error loading calendar page: {str(e)}", exc_info=True)
+        return RedirectResponse(url="/", status_code=302)
+
+
 async def tasks_page(request: Request):
     """Celery tasks monitoring page."""
     from src.celery_app import app

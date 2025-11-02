@@ -3,6 +3,7 @@
 from fastapi import FastAPI, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
+from typing import Optional
 
 from src.api import routes, posts, twitter, audit
 
@@ -63,6 +64,12 @@ async def view_post_page(request: Request, post_id: int):
 async def tasks_page(request: Request):
     """Celery tasks monitoring page."""
     return await routes.tasks_page(request)
+
+
+@app.get("/calendar", response_class=HTMLResponse)
+async def calendar_page(request: Request):
+    """Calendar view page showing weekly schedule."""
+    return await routes.calendar_page(request)
 
 
 # Health Check Endpoints
@@ -196,6 +203,23 @@ async def instant_publish(post_id: int):
 async def get_post(post_id: int):
     """Get a single post with all related data."""
     return await posts.get_post(post_id)
+
+
+@app.get("/api/calendar/week")
+async def get_weekly_schedule(
+    week_start: Optional[str] = None,
+    timezone: Optional[str] = None,
+    locale: Optional[str] = 'monday'
+):
+    """Get weekly schedule data.
+    
+    Includes locale in response so client doesn't need to infer week boundaries.
+    """
+    return await posts.get_weekly_schedule(
+        week_start=week_start,
+        timezone=timezone,
+        locale=locale
+    )
 
 
 @app.post("/api/jobs/cleanup-orphaned")

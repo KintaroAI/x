@@ -13,6 +13,11 @@ from src.models import Post, Schedule
 from src.database import get_db
 from src.audit import log_info, log_error
 from src.services.scheduler_service import ScheduleResolver
+from src.services.calendar_service import (
+    get_week_boundaries,
+    generate_week_occurrences,
+    format_occurrence_for_calendar
+)
 from src.utils.timezone_utils import get_default_timezone, format_datetime_with_timezone
 
 logger = logging.getLogger(__name__)
@@ -859,6 +864,138 @@ async def get_post(post_id: int):
             message=f"Exception while getting post",
             component="api",
             extra_data=json.dumps({"post_id": post_id, "error": str(e), "error_type": type(e).__name__})
+        )
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e)}
+        )
+
+
+async def get_weekly_schedule(
+    week_start: Optional[str] = None,
+    timezone: Optional[str] = None,
+    locale: Optional[str] = 'monday'
+):
+    """Get all scheduled posts for a week.
+    
+    Args:
+        week_start: ISO date string (YYYY-MM-DD), defaults to current week start
+        timezone: IANA timezone string (e.g., 'America/Chicago'), defaults to default_timezone
+        locale: Week start day ('sunday' or 'monday'), defaults to 'monday'
+    
+    Returns:
+        JSON with week metadata and occurrences array
+    """
+    try:
+        logger.debug(f"get_weekly_schedule called with week_start={week_start}, timezone={timezone}, locale={locale}")
+        
+        # Get timezone
+        if timezone is None:
+            timezone = get_default_timezone()
+        
+        tz = pytz.timezone(timezone)
+        
+        # Parse week_start date if provided
+        if week_start:
+            try:
+                # Parse ISO date string (YYYY-MM-DD)
+                week_start_date = datetime.strptime(week_start, '%Y-%m-%d').date()
+                week_start_dt = tz.localize(datetime.combine(week_start_date, datetime.min.time()))
+            except ValueError as e:
+                logger.warning(f"Invalid week_start format: {week_start}, using current week")
+                week_start_dt = None
+        else:
+            week_start_dt = None
+        
+        # Calculate week boundaries
+        week_start_boundary, week_end_boundary = get_week_boundaries(week_start_dt, tz, locale)
+        
+        logger.debug(f"Week boundaries: {week_start_boundary} to {week_end_boundary}")
+        
+        # Query all enabled schedules with Post join
+        with get_db() as db:
+            schedules = (
+                db.query(Schedule)
+                .filter(Schedule.enabled == True)
+                .join(Post, Schedule.post_id == Post.id)
+                .filter(Post.deleted == False)
+                .all()
+            )
+            
+            logger.debug(f"Found {len(schedules)} enabled schedules")
+            
+            # Generate occurrences for each schedule
+            all_occurrences = []
+            
+            for schedule in schedules:
+                post = schedule.post
+                
+                # Generate occurrences within the week
+                occurrences = generate_week_occurrences(
+                    schedule,
+                    week_start_boundary,
+                    week_end_boundary,
+                    tz
+                )
+                
+                # Format each occurrence for calendar display
+                schedule_occurrences = []
+                for occurrence in occurrences:
+                    formatted = format_occurrence_for_calendar(
+                        occurrence,
+                        post,
+                        schedule,
+                        0,  # stack_index will be recalculated
+                        tz
+                    )
+                    schedule_occurrences.append((occurrence, formatted))
+                
+                all_occurrences.extend(schedule_occurrences)
+            
+            # Sort all occurrences by scheduled_time
+            all_occurrences.sort(key=lambda x: x[0])  # Sort by datetime
+            
+            # Calculate stack_index for overlapping occurrences
+            # Group by time slots (within 30 minutes) and assign stack_index
+            final_occurrences = []
+            time_slots = {}  # Map of (day, hour, 30-min-slot) -> count
+            
+            for occurrence_dt, occurrence_data in all_occurrences:
+                # Round to 30-minute slot for overlap detection
+                local_dt = occurrence_dt.astimezone(tz)
+                hour = local_dt.hour
+                minute_slot = (local_dt.minute // 30) * 30
+                day_of_week = local_dt.weekday()  # Monday=0, Sunday=6
+                
+                slot_key = (day_of_week, hour, minute_slot)
+                
+                if slot_key not in time_slots:
+                    time_slots[slot_key] = 0
+                
+                time_slots[slot_key] += 1
+                occurrence_data['stack_index'] = time_slots[slot_key] - 1
+                final_occurrences.append(occurrence_data)
+            
+            # Pre-sort by scheduled_time (already done, but ensure)
+            final_occurrences.sort(key=lambda x: x['scheduled_time'])
+            
+            logger.info(f"Generated {len(final_occurrences)} occurrences for week {week_start_boundary.date()} to {week_end_boundary.date()}")
+            
+            return {
+                "week_start": week_start_boundary.isoformat(),
+                "week_end": week_end_boundary.isoformat(),
+                "timezone": timezone,
+                "locale": locale,
+                "occurrences": final_occurrences
+            }
+    
+    except Exception as e:
+        logger.error(f"Unexpected error in get_weekly_schedule: {str(e)}", exc_info=True)
+        log_error(
+            action="weekly_schedule_exception",
+            message=f"Exception while getting weekly schedule",
+            component="api",
+            extra_data=json.dumps({"week_start": week_start, "timezone": timezone, "error": str(e), "error_type": type(e).__name__})
         )
         return JSONResponse(
             status_code=500,
