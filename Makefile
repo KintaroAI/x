@@ -1,4 +1,4 @@
-.PHONY: help dev prod up down logs logs-api clean migrate init-db migrate-create migrate-create-simple shell-db update-db build build-api build-worker test test-rrule test-scheduler coverage shell-api shell-worker
+.PHONY: help dev prod up down logs logs-api clean migrate init-db migrate-create migrate-create-simple shell-db update-db build build-api build-worker test test-rrule test-scheduler test-calendar test-calendar-unit test-calendar-integration test-calendar-service coverage shell-api shell-worker
 
 help:
 	@echo "Available commands:"
@@ -24,6 +24,10 @@ help:
 	@echo "  make test            - Run all tests"
 	@echo "  make test-rrule      - Run RRULE-specific tests"
 	@echo "  make test-scheduler  - Run scheduler service tests"
+	@echo "  make test-calendar    - Run all calendar tests"
+	@echo "  make test-calendar-unit - Run calendar unit tests"
+	@echo "  make test-calendar-integration - Run calendar integration tests"
+	@echo "  make test-calendar-service - Run calendar service tests only"
 	@echo "  make coverage        - Run tests with coverage report"
 
 dev:
@@ -117,6 +121,22 @@ test-rrule:
 test-scheduler:
 	@echo "Running scheduler service tests..."
 	docker compose exec api pytest tests/test_scheduler_service.py -v
+
+test-calendar:
+	@echo "Running all calendar tests..."
+	docker compose exec api pytest tests/test_calendar_*.py -v
+
+test-calendar-unit:
+	@echo "Running calendar unit tests..."
+	docker compose exec api pytest tests/test_calendar_service.py tests/test_calendar_api.py -v -m "unit"
+
+test-calendar-integration:
+	@echo "Running calendar integration tests..."
+	docker compose exec api pytest tests/test_calendar_integration.py -v -m "integration"
+
+test-calendar-service:
+	@echo "Running calendar service tests..."
+	docker compose exec api pytest tests/test_calendar_service.py -v
 
 coverage:
 	@echo "Running tests with coverage..."

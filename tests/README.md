@@ -38,6 +38,9 @@ docker compose exec api pytest tests/ -v -m "integration"
 - `test_scheduler_tasks.py` - Unit tests for scheduler tasks
 - `test_scheduler_integration.py` - Integration tests with database
 - `test_scheduler.py` - Manual test script (legacy)
+- `test_calendar_service.py` - Unit tests for calendar service functions
+- `test_calendar_api.py` - Unit tests for calendar API endpoint
+- `test_calendar_integration.py` - Integration tests for calendar functionality
 
 ### Test Categories
 
