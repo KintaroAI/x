@@ -66,12 +66,15 @@ CREATE TABLE variant_selection_history (
     id SERIAL PRIMARY KEY,
     template_id INTEGER NOT NULL REFERENCES post_templates(id) ON DELETE CASCADE,
     variant_id INTEGER NOT NULL REFERENCES post_variants(id) ON DELETE CASCADE,
-    selected_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    planned_at TIMESTAMP NOT NULL,  -- When this selection was planned (for clarity and dedupe)
+    selected_at TIMESTAMP NOT NULL DEFAULT NOW(),  -- When history was recorded
     schedule_id INTEGER NOT NULL REFERENCES schedules(id) ON DELETE CASCADE,
     job_id INTEGER NOT NULL REFERENCES publish_jobs(id) ON DELETE CASCADE,  -- Required: link to job
     
     -- No unique constraint on (template_id, variant_id, selected_at) - allow duplicates
     -- Instead, rely on UNIQUE(schedule_id, planned_at) on publish_jobs for deduplication
+    -- Optional unique guard here too:
+    -- CONSTRAINT uniq_variant_hist_sched_planned UNIQUE (schedule_id, planned_at)
 );
 
 CREATE INDEX idx_variant_selection_template_date 
@@ -119,7 +122,7 @@ ALTER TABLE publish_jobs
 
 -- CRITICAL: Unique constraint to prevent duplicate jobs across workers
 -- This is the true deduplication guard (matches existing dedupe_key logic)
-CREATE UNIQUE INDEX idx_publish_jobs_schedule_planned 
+CREATE UNIQUE INDEX uniq_publish_jobs_schedule_planned 
     ON publish_jobs(schedule_id, planned_at);
 
 CREATE INDEX idx_publish_jobs_variant_id ON publish_jobs(variant_id);
@@ -195,7 +198,8 @@ class VariantSelectionHistory(Base):
     id = Column(Integer, primary_key=True, index=True)
     template_id = Column(Integer, ForeignKey("post_templates.id"), nullable=False, index=True)
     variant_id = Column(Integer, ForeignKey("post_variants.id"), nullable=False, index=True)
-    selected_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    planned_at = Column(DateTime, nullable=False, index=True)  -- When this selection was planned
+    selected_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)  -- When history was recorded
     schedule_id = Column(Integer, ForeignKey("schedules.id"), nullable=False, index=True)
     job_id = Column(Integer, ForeignKey("publish_jobs.id"), nullable=False, index=True)  -- Required
     
@@ -289,7 +293,7 @@ class VariantSelector:
         schedule: Schedule,
         planned_at: datetime,
         seed: Optional[int] = None
-    ) -> Optional[PostVariant]:
+    ) -> tuple[Optional[PostVariant], int]:
         """
         Select a variant for a schedule at a given planned time.
         
@@ -299,11 +303,11 @@ class VariantSelector:
             seed: Optional seed for deterministic selection
         
         Returns:
-            Selected PostVariant or None if no active variants
+            Tuple of (Selected PostVariant or None, seed used for selection)
         """
         if not schedule.template_id:
             logger.warning(f"Schedule {schedule.id} has no template_id")
-            return None
+            return None, 0
         
         # Fetch active variants
         variants = (
@@ -317,11 +321,19 @@ class VariantSelector:
         
         if not variants:
             logger.warning(f"No active variants for template {schedule.template_id}")
-            return None
+            return None, 0
         
         # Generate deterministic seed if not provided
+        # Normalize planned_at to UTC and remove microseconds for consistency
         if seed is None:
-            seed = self._generate_seed(schedule.id, planned_at)
+            planned_at_normalized = planned_at
+            if planned_at.tzinfo is None:
+                planned_at_normalized = pytz.UTC.localize(planned_at)
+            else:
+                planned_at_normalized = planned_at.astimezone(pytz.UTC)
+            # Remove microseconds for second-precision consistency
+            planned_at_normalized = planned_at_normalized.replace(microsecond=0)
+            seed = self._generate_seed(schedule.id, planned_at_normalized)
         
         # Create RNG from seed for deterministic randomness
         rng = random.Random(seed)
@@ -341,7 +353,7 @@ class VariantSelector:
         # Select based on policy
         selected = self._select_by_policy(pool, schedule, rng)
         
-        return selected
+        return selected, seed
     
     def _generate_seed(self, schedule_id: int, planned_at: datetime) -> int:
         """Generate deterministic seed from schedule_id and planned_at.
@@ -355,7 +367,9 @@ class VariantSelector:
         else:
             planned_at_utc = planned_at.astimezone(pytz.UTC)
         
-        seed_str = f"{schedule_id}:{planned_at_utc.isoformat()}"
+        # Normalize to UTC and remove microseconds for second-precision consistency
+        planned_at_normalized = planned_at_utc.replace(microsecond=0)
+        seed_str = f"{schedule_id}:{planned_at_normalized.isoformat()}"
         seed_bytes = hashlib.sha256(seed_str.encode()).digest()
         return int.from_bytes(seed_bytes[:8], "big")  # Use first 8 bytes for int64
     
@@ -421,31 +435,20 @@ class VariantSelector:
             return rng.choices(pool, weights=weights, k=1)[0]
         
         elif policy == "ROUND_ROBIN":
-            # True round-robin: track last variant ID per schedule
+            # True round-robin: track last position per schedule
             # Sort variants by ID for stable ordering
             sorted_pool = sorted(pool, key=lambda v: v.id)
             n = len(sorted_pool)
             
-            # Get last selected variant ID (if any)
-            last_variant_id = schedule.last_variant_pos
+            # Get last position (or start at -1 if no previous selection)
+            last_pos = schedule.last_variant_pos if schedule.last_variant_pos is not None else -1
             
-            # Find index of last variant in current pool
-            if last_variant_id is not None:
-                try:
-                    last_idx = next(i for i, v in enumerate(sorted_pool) if v.id == last_variant_id)
-                except StopIteration:
-                    # Last variant no longer in pool (deactivated), start from 0
-                    last_idx = -1
-            else:
-                # No previous selection, start from 0
-                last_idx = -1
+            # Next position: (last_pos + 1) % n
+            next_pos = (last_pos + 1) % n
+            selected = sorted_pool[next_pos]
             
-            # Next position: (last_idx + 1) % n
-            next_idx = (last_idx + 1) % n
-            selected = sorted_pool[next_idx]
-            
-            # Update last_variant_pos (caller must persist in same transaction)
-            schedule.last_variant_pos = selected.id
+            # Update last_variant_pos to next_pos (caller must persist in same transaction)
+            schedule.last_variant_pos = next_pos
             
             return selected
         
@@ -463,18 +466,27 @@ class VariantSelector:
         variant_id: int,
         schedule_id: int,
         job_id: int,
-        selected_at: datetime
+        planned_at: datetime,
+        selected_at: Optional[datetime] = None
     ):
         """Record variant selection in history.
         
         CRITICAL: Must be called AFTER job is created (so we have job_id).
         This ensures history is linked to the job from the start.
+        
+        Args:
+            planned_at: The planned execution time (for clarity and dedupe)
+            selected_at: When history was recorded (defaults to now)
         """
+        if selected_at is None:
+            selected_at = datetime.utcnow()
+        
         history = VariantSelectionHistory(
             template_id=template_id,
             variant_id=variant_id,
             schedule_id=schedule_id,
             job_id=job_id,
+            planned_at=planned_at,
             selected_at=selected_at
         )
         self.db.add(history)
@@ -494,12 +506,18 @@ class VariantSelector:
     def validate_content_safety(
         self,
         variant: PostVariant,
-        recent_published: Optional[List[str]] = None
+        recent_published: Optional[List[str]] = None,
+        window_size: int = 10
     ) -> tuple[bool, Optional[str]]:
         """
         Validate variant content for safety:
         - Check X character/word limits
-        - Check for near-duplicate content (if recent_published provided)
+        - Check for near-duplicate content using rolling hash of final body
+        
+        Args:
+            variant: Variant to validate
+            recent_published: List of recently published post texts (last N)
+            window_size: Number of recent publishes to check (if recent_published not provided)
         
         Returns: (is_valid, error_message)
         """
@@ -507,9 +525,31 @@ class VariantSelector:
         if len(variant.text) > 280:
             return False, f"Text exceeds 280 characters: {len(variant.text)}"
         
-        # Check for near-duplicate content
+        # Check for near-duplicate content using rolling hash
+        if recent_published is None:
+            # Fetch recent published texts from database
+            from src.models import PublishedPost
+            recent_posts = (
+                self.db.query(PublishedPost)
+                .order_by(PublishedPost.published_at.desc())
+                .limit(window_size)
+                .all()
+            )
+            recent_published = []
+            for pub_post in recent_posts:
+                if pub_post.variant_id:
+                    variant_obj = (
+                        self.db.query(PostVariant)
+                        .filter(PostVariant.id == pub_post.variant_id)
+                        .first()
+                    )
+                    if variant_obj:
+                        recent_published.append(variant_obj.text)
+                # Could also check pub_post.post.text if post_id is set
+        
         if recent_published:
             import difflib
+            # Compute hash of final body (after any placeholder expansion)
             variant_hash = hashlib.md5(variant.text.encode()).hexdigest()
             for recent_text in recent_published:
                 recent_hash = hashlib.md5(recent_text.encode()).hexdigest()
@@ -568,7 +608,8 @@ def scheduler_tick():
                     
                     if schedule.template_id:
                         # New template-based schedule
-                        selected_variant = variant_selector.select_variant(
+                        # select_variant returns both variant and seed (single generation)
+                        selected_variant, selection_seed = variant_selector.select_variant(
                             schedule, 
                             planned_at
                         )
@@ -578,12 +619,6 @@ def scheduler_tick():
                                 f"Schedule {schedule.id} has no active variants, skipping"
                             )
                             continue
-                        
-                        # Generate seed for this selection
-                        selection_seed = variant_selector._generate_seed(
-                            schedule.id, 
-                            planned_at
-                        )
                     # else: Legacy post_id schedule - handled in publish_post()
                     
                     # Create publish job (atomic with selection above)
@@ -604,13 +639,14 @@ def scheduler_tick():
                     db.flush()  # Get job.id
                     
                     # Record selection history AFTER job creation (so we have job_id)
-                    if selected_variant and schedule.template_id and schedule.no_repeat_window > 0:
+                    # Always record if variant-based, regardless of no_repeat_window (for audit)
+                    if selected_variant and schedule.template_id:
                         variant_selector.record_selection(
                             template_id=schedule.template_id,
                             variant_id=selected_variant.id,
                             schedule_id=schedule.id,
                             job_id=job.id,  # Now available after flush
-                            selected_at=planned_at
+                            planned_at=planned_at
                         )
                     
                     # ... rest of existing code (enqueue, update schedule, etc.) ...
