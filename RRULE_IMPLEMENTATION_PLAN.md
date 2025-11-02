@@ -51,6 +51,7 @@ from dateutil.rrule import rrulestr
    - Problem: Parsing RRULE on every scheduler tick adds latency
    - Solution: In-process cache keyed by `(schedule_id, rrule_hash, dtstart)`
    - Cache compiled `rrule`/`rruleset` objects
+   - **Implementation**: Use `functools.lru_cache` or bounded `OrderedDict` for proper LRU behavior
    - Invalidate when `schedule_spec` changes or DTSTART changes
    - Keeps tick latency stable with many schedules
 
@@ -69,6 +70,7 @@ from dateutil.rrule import rrulestr
 8. **Storage Convention** (Prevent Regressions)
    - Convert to UTC: `dt.astimezone(pytz.UTC)`
    - Store as naive: `.replace(tzinfo=None)` (consistent with existing codebase)
+   - **Note**: If there's risk of mixing naive/aware datetimes, consider storing **aware UTC** instead
    - Document this convention so other contributors don't accidentally store timezone-aware datetimes
    - Prevents double-conversion bugs
 
@@ -190,8 +192,13 @@ RRULE:FREQ=DAILY;INTERVAL=1
 ### Implementation Code Structure
 
 ```python
-# Cache for compiled RRULE objects (keyed by schedule_id)
-_rrule_cache = {}  # {(schedule_id, rrule_hash): (rrule_obj, dtstart)}
+# Cache for compiled RRULE objects (using proper LRU)
+from functools import lru_cache
+from collections import OrderedDict
+
+# Use bounded OrderedDict for LRU cache with maxsize
+_rrule_cache = OrderedDict()  # {(schedule_id, rrule_hash): (rrule_obj, dtstart)}
+MAX_CACHE_SIZE = 1000
 
 def _resolve_rrule(self, schedule: Schedule) -> Optional[datetime]:
     """Resolve RRULE schedule (iCal recurrence rule).
@@ -229,17 +236,21 @@ def _resolve_rrule(self, schedule: Schedule) -> Optional[datetime]:
             # Reuse if DTSTART matches
             if cached_dtstart == dtstart:
                 rule = cached_rule
+                # Move to end (LRU - most recently used)
+                _rrule_cache.move_to_end(cache_key)
             else:
                 # DTSTART changed, recompile
                 rule = self._parse_rrule(schedule.schedule_spec, dtstart)
                 _rrule_cache[cache_key] = (rule, dtstart)
+                _rrule_cache.move_to_end(cache_key)
         else:
             # Parse and cache
             rule = self._parse_rrule(schedule.schedule_spec, dtstart)
             _rrule_cache[cache_key] = (rule, dtstart)
-            # Limit cache size (simple LRU)
-            if len(_rrule_cache) > 1000:
-                _rrule_cache.pop(next(iter(_rrule_cache)))
+            
+            # LRU eviction: remove oldest if cache is full
+            if len(_rrule_cache) > MAX_CACHE_SIZE:
+                _rrule_cache.popitem(last=False)  # Remove oldest (FIFO)
         
         # Get next occurrence after last_run_at or now
         after_time = schedule.last_run_at or now_tz
@@ -250,6 +261,8 @@ def _resolve_rrule(self, schedule: Schedule) -> Optional[datetime]:
         
         # Find next occurrence using rule.after(inc=False)
         # inc=False: Skip occurrence if it equals reference time (safe for "next occurrence")
+        # Note: If DTSTART was snapped and is in the past, rule.after() will compute
+        # the correct next occurrence based on the RRULE pattern (handles monthly/yearly correctly)
         next_occurrence = rule.after(after_time, inc=False)
         
         if next_occurrence is None:
@@ -292,10 +305,19 @@ def _get_rrule_dtstart(self, schedule: Schedule, tz: pytz.timezone, rrule_spec: 
     
     If BYHOUR/BYMINUTE/BYSECOND present in RRULE, snap DTSTART to that wall time.
     Otherwise use schedule.created_at or current time.
+    
+    Note: After snapping, if the time is in the past, we let dateutil compute
+    the correct next occurrence via rule.after() rather than manually advancing.
+    This correctly handles monthly/yearly patterns.
+    
+    Implementation note: We use regex to detect BYHOUR/MINUTE/SECOND for simplicity.
+    The rule will be parsed once later, and rule.after() will compute the correct
+    next occurrence even if DTSTART is in the past.
     """
     import re
     
-    # Extract time constraints from RRULE
+    # Extract time constraints from RRULE using regex
+    # (dateutil.rrule doesn't expose these properties directly, so regex is practical)
     has_byhour = re.search(r'BYHOUR=(\d+)', rrule_spec.upper())
     has_byminute = re.search(r'BYMINUTE=(\d+)', rrule_spec.upper())
     has_bysecond = re.search(r'BYSECOND=(\d+)', rrule_spec.upper())
@@ -306,37 +328,28 @@ def _get_rrule_dtstart(self, schedule: Schedule, tz: pytz.timezone, rrule_spec: 
         base_dtstart = pytz.UTC.localize(base_dtstart)
     base_dtstart = base_dtstart.astimezone(tz)
     
-    # If time constraints present, snap to that wall time
-    if has_byhour or has_byminute or has_bysecond:
-        # Extract desired time components
-        hour = int(has_byhour.group(1)) if has_byhour else base_dtstart.hour
-        minute = int(has_byminute.group(1)) if has_byminute else base_dtstart.minute
-        second = int(has_bysecond.group(1)) if has_bysecond else 0
-        
-        # Snap to wall time on or after now
-        now_tz = datetime.now(tz)
-        dtstart = tz.localize(datetime(
-            base_dtstart.year, base_dtstart.month, base_dtstart.day,
-            hour, minute, second
-        ))
-        
-        # If snapped time is in past, move to next occurrence
-        if dtstart < now_tz:
-            # For daily/weekly patterns, advance by appropriate interval
-            # This is a simplification; actual pattern would need full RRULE parse
-            from dateutil.relativedelta import relativedelta
-            if 'FREQ=DAILY' in rrule_spec.upper():
-                dtstart += relativedelta(days=1)
-            elif 'FREQ=WEEKLY' in rrule_spec.upper():
-                dtstart += relativedelta(weeks=1)
-            # For other frequencies, just use tomorrow as fallback
-            else:
-                dtstart += relativedelta(days=1)
-        
-        return dtstart
-    else:
-        # No time constraints, use base DTSTART as-is
-        return base_dtstart
+        # If time constraints present, snap to that wall time
+        if has_byhour or has_byminute or has_bysecond:
+            # Extract desired time components
+            hour = int(has_byhour.group(1)) if has_byhour else base_dtstart.hour
+            minute = int(has_byminute.group(1)) if has_byminute else base_dtstart.minute
+            second = int(has_bysecond.group(1)) if has_bysecond else 0
+            
+            # Snap to wall time (use today's date, or next occurrence if past)
+            now_tz = datetime.now(tz)
+            dtstart = tz.localize(datetime(
+                base_dtstart.year, base_dtstart.month, base_dtstart.day,
+                hour, minute, second
+            ))
+            
+            # If snapped time is in past, we'll let dateutil compute the correct next occurrence
+            # after constructing the rule, rather than manually advancing by day/week
+            # This handles monthly/yearly rules correctly
+            
+            return dtstart
+        else:
+            # No time constraints, use base DTSTART as-is
+            return base_dtstart
 
 def _validate_rrule(self, rrule_spec: str) -> bool:
     """Validate RRULE format with whitelist and size limits."""
@@ -347,8 +360,8 @@ def _validate_rrule(self, rrule_spec: str) -> bool:
         'BYMINUTE', 'BYSECOND', 'DTSTART', 'RRULE'
     }
     
-    # Size limits
-    MAX_RRULE_LENGTH = 10000  # Prevent pathological inputs
+    # Size limits (2-4k is reasonable; 10k is generous but safe)
+    MAX_RRULE_LENGTH = 4000  # Prevent pathological inputs while allowing legitimate RRULEs
     
     if len(rrule_spec) > MAX_RRULE_LENGTH:
         return False
@@ -652,6 +665,19 @@ from dateutil.rrule import rrulestr
 
 This plan has been enhanced based on production-grade feedback to ensure **"calendar-grade"** RRULE support:
 
+### Latest Review (Final Refinements)
+
+Based on final review, additional refinements have been incorporated:
+
+1. **DTSTART Snapping Improvement** - Removed manual day/week advancement; let `dateutil` compute next occurrence via `rule.after()` (handles monthly/yearly correctly)
+2. **Cache Implementation** - Updated to use `OrderedDict` with proper LRU (`move_to_end`, `popitem(last=False)`) instead of manual FIFO
+3. **Validation Size Limit** - Reduced from 10k to 4k (more reasonable while still safe)
+4. **Storage Convention Note** - Added note about considering aware UTC if naive/aware mixing is a risk
+5. **Timezone Library Note** - Documented `zoneinfo` as future migration target for Python 3.9+
+6. **Code Simplification** - Simplified DTSTART detection to use regex (practical since `dateutil` doesn't expose BY* properties directly)
+
+### Previous Improvements
+
 ### ✅ Incorporated Improvements
 
 1. **DTSTART Smart Snapping** - Prevents drift by snapping to BYHOUR/BYMINUTE when present
@@ -667,10 +693,11 @@ This plan has been enhanced based on production-grade feedback to ensure **"cale
 
 ### Design Decisions
 
-- **Timezone**: Using `pytz` (consistent with existing codebase) - `zoneinfo` could be future enhancement
-- **Caching**: Simple in-process cache with LRU eviction (can enhance with proper LRU later)
+- **Timezone**: Using `pytz` (consistent with existing codebase) - note: `zoneinfo` (Python 3.9+) could be future migration target for new code
+- **Caching**: Use `functools.lru_cache` or bounded `OrderedDict` for proper LRU behavior (not manual dict with FIFO)
 - **Validation**: Whitelist approach with size limits (prevents DoS while allowing legitimate RRULEs)
 - **Error Handling**: Return `None` to disable schedule (consistent with existing behavior)
+- **DTSTART Snapping**: After smart snapping, let `dateutil` compute next occurrence via `rule.after(now)` rather than manual day/week bumps
 
 ### Next Steps
 
