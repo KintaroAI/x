@@ -948,19 +948,26 @@ async def get_weekly_schedule(
                         0,  # stack_index will be recalculated
                         tz
                     )
-                    schedule_occurrences.append((occurrence, formatted))
+                    # Store metadata for stable sorting
+                    schedule_occurrences.append((
+                        occurrence,
+                        formatted,
+                        schedule.created_at,  # For stable sort
+                        post.id  # For stable sort
+                    ))
                 
                 all_occurrences.extend(schedule_occurrences)
             
-            # Sort all occurrences by scheduled_time
-            all_occurrences.sort(key=lambda x: x[0])  # Sort by datetime
+            # Stable sort: first by scheduled_time, then by schedule.created_at, then by post.id
+            # This ensures deterministic stacking order
+            all_occurrences.sort(key=lambda x: (x[0], x[2], x[3]))  # (datetime, created_at, post_id)
             
             # Calculate stack_index for overlapping occurrences
-            # Group by time slots (within 30 minutes) and assign stack_index
+            # Group by time slots (within 30 minutes) and assign stack_index based on stable sort order
             final_occurrences = []
-            time_slots = {}  # Map of (day, hour, 30-min-slot) -> count
+            time_slots = {}  # Map of (day, hour, 30-min-slot) -> list of occurrences in that slot
             
-            for occurrence_dt, occurrence_data in all_occurrences:
+            for occurrence_dt, occurrence_data, created_at, post_id in all_occurrences:
                 # Round to 30-minute slot for overlap detection
                 local_dt = occurrence_dt.astimezone(tz)
                 hour = local_dt.hour
@@ -969,14 +976,20 @@ async def get_weekly_schedule(
                 
                 slot_key = (day_of_week, hour, minute_slot)
                 
+                # Initialize slot if needed
                 if slot_key not in time_slots:
-                    time_slots[slot_key] = 0
+                    time_slots[slot_key] = []
                 
-                time_slots[slot_key] += 1
-                occurrence_data['stack_index'] = time_slots[slot_key] - 1
-                final_occurrences.append(occurrence_data)
+                # Add occurrence to slot
+                time_slots[slot_key].append((occurrence_data, created_at, post_id))
             
-            # Pre-sort by scheduled_time (already done, but ensure)
+            # Assign stack_index based on order within each time slot (stable sort order)
+            for slot_key, slot_occurrences in time_slots.items():
+                for idx, (occurrence_data, created_at, post_id) in enumerate(slot_occurrences):
+                    occurrence_data['stack_index'] = idx
+                    final_occurrences.append(occurrence_data)
+            
+            # Pre-sort by scheduled_time for final output
             final_occurrences.sort(key=lambda x: x['scheduled_time'])
             
             logger.info(f"Generated {len(final_occurrences)} occurrences for week {week_start_boundary.date()} to {week_end_boundary.date()}")
