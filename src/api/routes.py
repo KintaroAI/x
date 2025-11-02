@@ -1,14 +1,52 @@
 """Page and template routes."""
 
 import logging
+from datetime import datetime
 from fastapi import Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+
+from src.utils.timezone_utils import format_datetime_with_timezone, get_default_timezone
 
 logger = logging.getLogger(__name__)
 
 # Create templates instance - this will be used by all route functions
 templates = Jinja2Templates(directory="templates")
+
+
+def datetime_filter(dt, timezone=None, format_str=None):
+    """
+    Jinja2 filter to format datetime with timezone support.
+    
+    Args:
+        dt: datetime object (or None)
+        timezone: Optional timezone string (defaults to DEFAULT_TIMEZONE)
+        format_str: Optional format string (not used currently, kept for future use)
+    
+    Returns:
+        Formatted datetime string, or '-' if dt is None
+    """
+    if dt is None:
+        return '-'
+    
+    # Use provided timezone or default
+    if timezone is None:
+        timezone = get_default_timezone()
+    
+    # Format with timezone
+    try:
+        # Use the already-imported function
+        return format_datetime_with_timezone(dt, timezone)
+    except Exception as e:
+        logger.warning(f"Error formatting datetime with timezone: {e}")
+        # Fallback to simple formatting
+        if isinstance(dt, datetime):
+            return dt.strftime('%Y-%m-%d %H:%M:%S UTC')
+        return str(dt)
+
+
+# Register the filter with Jinja2 templates
+templates.env.filters["datetime_tz"] = datetime_filter
 
 
 async def root(request: Request):
