@@ -67,7 +67,13 @@ def scheduler_tick():
                     from src.utils.job_queue import enqueue_publish_job
                     enqueue_publish_job(job.id, eta=planned_at)
                     
+                    # Update last run time FIRST (before resolving next run)
+                    # This ensures recurring schedules (rrule, cron) find the next occurrence
+                    # after the current execution time, not the previous one
+                    schedule.last_run_at = planned_at
+                    
                     # Compute and persist next run time
+                    # For recurring schedules, this will use last_run_at as the reference point
                     next_run_at = scheduler_resolver.resolve_schedule(schedule)
                     if next_run_at:
                         schedule.next_run_at = next_run_at
@@ -77,8 +83,6 @@ def scheduler_tick():
                         schedule.enabled = False
                         logger.info(f"Disabling schedule {schedule.id} - no next run time")
                     
-                    # Update last run time
-                    schedule.last_run_at = planned_at
                     schedule.updated_at = datetime.utcnow()
                     
                     jobs_created += 1
