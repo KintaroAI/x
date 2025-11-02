@@ -9,6 +9,7 @@ from src.database import get_db
 from src.models import Schedule, PublishJob
 from src.utils.redis_utils import acquire_dedupe_lock
 from src.services.scheduler_service import ScheduleResolver
+from src.services.variant_service import VariantSelector
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,7 @@ def scheduler_tick():
             logger.info(f"Found {len(due_schedules)} due schedules")
             
             scheduler_resolver = ScheduleResolver()
+            variant_selector = VariantSelector(db)  # NEW: Variant selection service
             jobs_created = 0
             
             for schedule in due_schedules:
@@ -51,17 +53,53 @@ def scheduler_tick():
                         logger.info(f"Skipping schedule {schedule.id} - dedupe lock already exists")
                         continue
                     
-                    # Create publish job
+                    # VARIANT SELECTION (NEW) - All within the same transaction
+                    # Schedule row is already locked via WITH FOR UPDATE SKIP LOCKED
+                    selected_variant = None
+                    selection_seed = None
+                    
+                    if schedule.template_id:
+                        # New template-based schedule
+                        # select_variant returns both variant and seed (single generation)
+                        selected_variant, selection_seed = variant_selector.select_variant(
+                            schedule, 
+                            planned_at
+                        )
+                        
+                        if not selected_variant:
+                            logger.error(
+                                f"Schedule {schedule.id} has no active variants, skipping"
+                            )
+                            continue
+                    # else: Legacy post_id schedule - handled in publish_post()
+                    
+                    # Create publish job (atomic with selection above)
+                    # The UNIQUE constraint on (schedule_id, planned_at) prevents duplicates
                     job = PublishJob(
                         schedule_id=schedule.id,
                         planned_at=planned_at,
                         status="planned",
                         dedupe_key=f"{schedule.id}:{planned_at.isoformat()}",
+                        variant_id=selected_variant.id if selected_variant else None,
+                        selection_policy=schedule.selection_policy if schedule.template_id else None,
+                        selection_seed=selection_seed,
+                        selected_at=datetime.utcnow() if selected_variant else None,
                         created_at=datetime.utcnow(),
                         updated_at=datetime.utcnow()
                     )
                     db.add(job)
                     db.flush()  # Get job.id
+                    
+                    # Record selection history AFTER job creation (so we have job_id)
+                    # Always record if variant-based, regardless of no_repeat_window (for audit)
+                    if selected_variant and schedule.template_id:
+                        variant_selector.record_selection(
+                            template_id=schedule.template_id,
+                            variant_id=selected_variant.id,
+                            schedule_id=schedule.id,
+                            job_id=job.id,  # Now available after flush
+                            planned_at=planned_at
+                        )
                     
                     # Enqueue publish task with ETA via shared helper
                     from src.utils.job_queue import enqueue_publish_job
