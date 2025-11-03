@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from typing import Optional
 
-from src.api import routes, posts, twitter, audit
+from src.api import routes, posts, twitter, audit, templates
 
 app = FastAPI(
     title="X Scheduler",
@@ -237,6 +237,116 @@ async def get_default_timezone():
         "default_timezone": get_default_timezone(),
         "timezone_list": get_timezone_list()
     }
+
+
+# Template CRUD Endpoints
+@app.post("/api/templates")
+async def create_template(
+    name: str = Form(...),
+    description: str = Form(None),
+    created_by: str = Form(None)
+):
+    """Create a new post template."""
+    return await templates.create_template(name, description, created_by)
+
+
+@app.get("/api/templates")
+async def list_templates(active_only: bool = True):
+    """Get all templates. Optionally include inactive templates."""
+    return await templates.list_templates(active_only)
+
+
+@app.get("/api/templates/{template_id}")
+async def get_template(template_id: int):
+    """Get a single template with all its variants."""
+    return await templates.get_template(template_id)
+
+
+@app.post("/api/templates/{template_id}")
+async def update_template(
+    template_id: int,
+    name: str = Form(None),
+    description: str = Form(None),
+    active: bool = Form(None)
+):
+    """Update an existing template."""
+    return await templates.update_template(template_id, name, description, active)
+
+
+@app.delete("/api/templates/{template_id}")
+async def delete_template(template_id: int):
+    """Delete a template and all its variants (cascade)."""
+    return await templates.delete_template(template_id)
+
+
+# Variant CRUD Endpoints
+@app.post("/api/templates/{template_id}/variants")
+async def create_variant(
+    template_id: int,
+    text: str = Form(...),
+    weight: int = Form(1),
+    media_refs: str = Form(None),
+    locale: str = Form(None),
+    tags: str = Form(None),
+    created_by: str = Form(None)
+):
+    """Create a new variant for a template."""
+    return await templates.create_variant(template_id, text, weight, media_refs, locale, tags, created_by)
+
+
+@app.get("/api/templates/{template_id}/variants")
+async def list_variants(template_id: int, active_only: bool = True):
+    """Get all variants for a template. Optionally include inactive variants."""
+    return await templates.list_variants(template_id, active_only)
+
+
+@app.post("/api/variants/{variant_id}")
+async def update_variant(
+    variant_id: int,
+    text: str = Form(None),
+    weight: int = Form(None),
+    active: bool = Form(None),
+    media_refs: str = Form(None),
+    locale: str = Form(None),
+    tags: str = Form(None)
+):
+    """Update an existing variant."""
+    return await templates.update_variant(variant_id, text, weight, active, media_refs, locale, tags)
+
+
+@app.delete("/api/variants/{variant_id}")
+async def delete_variant(variant_id: int):
+    """Delete a variant."""
+    return await templates.delete_variant(variant_id)
+
+
+# Variant Selection Preview
+@app.get("/api/schedules/{schedule_id}/preview")
+async def preview_variant_selection(
+    schedule_id: int,
+    planned_at: Optional[str] = None
+):
+    """Preview which variant would be selected for a given planned_at time."""
+    return await templates.preview_variant_selection(schedule_id, planned_at)
+
+
+# Schedule Update Endpoint (for template_id and selection policies)
+@app.post("/api/schedules/{schedule_id}")
+async def update_schedule(
+    schedule_id: int,
+    template_id: Optional[int] = Form(None),
+    selection_policy: Optional[str] = Form(None),
+    no_repeat_window: Optional[int] = Form(None),
+    no_repeat_scope: Optional[str] = Form(None)
+):
+    """Update a schedule's template_id and selection policy settings."""
+    return await templates.update_schedule(
+        schedule_id, 
+        template_id, 
+        selection_policy, 
+        no_repeat_window, 
+        no_repeat_scope
+    )
 
 
 def main():
