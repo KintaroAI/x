@@ -72,6 +72,48 @@ async def calendar_page(request: Request):
     return await routes.calendar_page(request)
 
 
+@app.get("/templates", response_class=HTMLResponse)
+async def templates_page(request: Request):
+    """Templates list page."""
+    return await routes.templates_page(request)
+
+
+@app.get("/create-template", response_class=HTMLResponse)
+async def create_template_page(request: Request):
+    """Template creation page."""
+    return await routes.create_template_page(request)
+
+
+@app.get("/template/{template_id}", response_class=HTMLResponse)
+async def view_template_page(request: Request, template_id: int):
+    """Template view page showing template details and variants."""
+    return await routes.view_template_page(request, template_id)
+
+
+@app.get("/template/{template_id}/edit", response_class=HTMLResponse)
+async def edit_template_page(request: Request, template_id: int):
+    """Template editing page."""
+    return await routes.edit_template_page(request, template_id)
+
+
+@app.get("/template/{template_id}/add-variant", response_class=HTMLResponse)
+async def create_variant_page(request: Request, template_id: int):
+    """Variant creation page."""
+    return await routes.create_variant_page(request, template_id)
+
+
+@app.get("/variant/{variant_id}/edit", response_class=HTMLResponse)
+async def edit_variant_page(request: Request, variant_id: int):
+    """Variant editing page."""
+    return await routes.edit_variant_page(request, variant_id)
+
+
+@app.get("/schedule/{schedule_id}/manage", response_class=HTMLResponse)
+async def manage_schedule_page(request: Request, schedule_id: int):
+    """Schedule management page for updating template and selection policy."""
+    return await routes.manage_schedule_page(request, schedule_id)
+
+
 # Health Check Endpoints
 @app.get("/api/health")
 async def health():

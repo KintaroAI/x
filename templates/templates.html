@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+
+{% block title %}Templates - X Scheduler{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto">
+    <div class="flex justify-between items-center mb-8">
+        <h1 class="text-3xl font-bold text-gray-900">Post Templates</h1>
+        <a href="/create-template" class="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors font-semibold">
+            + Create Template
+        </a>
+    </div>
+    
+    <div class="bg-white rounded-lg shadow-lg p-8">
+        <div class="flex justify-between items-center mb-6">
+            <h2 class="text-2xl font-semibold text-gray-800">All Templates</h2>
+            <label class="flex items-center gap-2 cursor-pointer">
+                <span class="text-sm text-gray-600">Show inactive</span>
+                <input type="checkbox" id="show-inactive-toggle" class="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500" />
+            </label>
+        </div>
+        
+        <div id="templates-container" class="space-y-4">
+            <p class="text-gray-600 text-center">Loading templates...</p>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Load templates on page load
+    document.addEventListener('DOMContentLoaded', function() {
+        loadTemplates();
+        
+        // Toggle show inactive
+        document.getElementById('show-inactive-toggle').addEventListener('change', function(e) {
+            loadTemplates(e.target.checked);
+        });
+    });
+    
+    function loadTemplates(includeInactive = false) {
+        fetch(`/api/templates?active_only=${!includeInactive}`)
+            .then(response => response.json())
+            .then(data => {
+                const container = document.getElementById('templates-container');
+                
+                if (data.error) {
+                    container.innerHTML = `<p class="text-red-600 text-center">${data.error}</p>`;
+                    return;
+                }
+                
+                if (data.length === 0) {
+                    container.innerHTML = `
+                        <div class="text-center py-12">
+                            <p class="text-gray-600 mb-4">No templates found.</p>
+                            <a href="/create-template" class="text-blue-600 hover:text-blue-800 font-semibold">Create your first template →</a>
+                        </div>
+                    `;
+                    return;
+                }
+                
+                container.innerHTML = data.map(template => `
+                    <div class="border border-gray-200 rounded-lg p-6 hover:shadow-md transition-shadow ${template.active ? '' : 'opacity-60'}">
+                        <div class="flex justify-between items-start">
+                            <div class="flex-1">
+                                <div class="flex items-center gap-3 mb-2">
+                                    <h3 class="text-xl font-semibold text-gray-900">
+                                        <a href="/template/${template.id}" class="hover:text-blue-600 transition-colors">
+                                            ${template.name}
+                                        </a>
+                                    </h3>
+                                    ${template.active ? 
+                                        '<span class="px-2 py-1 bg-green-100 text-green-800 text-xs font-semibold rounded">Active</span>' : 
+                                        '<span class="px-2 py-1 bg-gray-100 text-gray-800 text-xs font-semibold rounded">Inactive</span>'
+                                    }
+                                </div>
+                                ${template.description ? 
+                                    `<p class="text-gray-600 mb-3">${template.description}</p>` : 
+                                    ''
+                                }
+                                <div class="flex items-center gap-4 text-sm text-gray-500">
+                                    <span>Created: ${new Date(template.created_at).toLocaleDateString()}</span>
+                                    ${template.created_by ? `<span>By: ${template.created_by}</span>` : ''}
+                                </div>
+                            </div>
+                            <div class="flex gap-2">
+                                <a href="/template/${template.id}" class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors text-sm font-semibold">
+                                    View
+                                </a>
+                                <button onclick="deleteTemplate(${template.id}, '${template.name}')" class="bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 transition-colors text-sm font-semibold">
+                                    Delete
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                `).join('');
+            })
+            .catch(error => {
+                console.error('Error loading templates:', error);
+                document.getElementById('templates-container').innerHTML = 
+                    '<p class="text-red-600 text-center">Error loading templates. Please refresh the page.</p>';
+            });
+    }
+    
+    function deleteTemplate(id, name) {
+        Swal.fire({
+            title: 'Delete Template?',
+            text: `Are you sure you want to delete "${name}"? This will also delete all variants. This action cannot be undone.`,
+            icon: 'warning',
+            showCancelButton: true,
+            confirmButtonColor: '#d33',
+            cancelButtonColor: '#3085d6',
+            confirmButtonText: 'Yes, delete it'
+        }).then((result) => {
+            if (result.isConfirmed) {
+                fetch(`/api/templates/${id}`, {
+                    method: 'DELETE'
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        Swal.fire('Error', data.error, 'error');
+                    } else {
+                        Swal.fire('Deleted!', 'Template has been deleted.', 'success');
+                        loadTemplates(document.getElementById('show-inactive-toggle').checked);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error deleting template:', error);
+                    Swal.fire('Error', 'Failed to delete template.', 'error');
+                });
+            }
+        });
+    }
+</script>
+{% endblock %}
+

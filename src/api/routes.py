@@ -333,3 +333,165 @@ async def tasks_page(request: Request):
         }
     )
 
+
+async def templates_page(request: Request):
+    """Templates list page."""
+    return templates.TemplateResponse("templates.html", {"request": request})
+
+
+async def create_template_page(request: Request):
+    """Template creation page."""
+    return templates.TemplateResponse(
+        "create_template.html", 
+        {
+            "request": request, 
+            "template": None, 
+            "is_edit": False
+        }
+    )
+
+
+async def edit_template_page(request: Request, template_id: int):
+    """Template editing page."""
+    try:
+        from src.models import PostTemplate
+        from src.database import get_db
+        
+        with get_db() as db:
+            template = db.query(PostTemplate).filter(PostTemplate.id == template_id).first()
+            
+            if not template:
+                return RedirectResponse(url="/templates", status_code=302)
+            
+            return templates.TemplateResponse(
+                "create_template.html", 
+                {
+                    "request": request, 
+                    "template": template, 
+                    "is_edit": True
+                }
+            )
+    except Exception as e:
+        logger.error(f"Error loading edit template page: {str(e)}", exc_info=True)
+        return RedirectResponse(url="/templates", status_code=302)
+
+
+async def view_template_page(request: Request, template_id: int):
+    """Template view page showing template details and variants."""
+    try:
+        from src.models import PostTemplate, PostVariant, Schedule
+        from src.database import get_db
+        
+        with get_db() as db:
+            template = db.query(PostTemplate).filter(PostTemplate.id == template_id).first()
+            
+            if not template:
+                return RedirectResponse(url="/templates", status_code=302)
+            
+            # Get all variants for this template
+            variants = db.query(PostVariant).filter(
+                PostVariant.template_id == template_id
+            ).order_by(PostVariant.created_at.asc()).all()
+            
+            # Get schedules using this template
+            schedules = db.query(Schedule).filter(
+                Schedule.template_id == template_id
+            ).all()
+            
+            return templates.TemplateResponse(
+                "view_template.html",
+                {
+                    "request": request,
+                    "template": template,
+                    "variants": variants,
+                    "schedules": schedules
+                }
+            )
+    except Exception as e:
+        logger.error(f"Error loading view template page: {str(e)}", exc_info=True)
+        return RedirectResponse(url="/templates", status_code=302)
+
+
+async def create_variant_page(request: Request, template_id: int):
+    """Variant creation page."""
+    try:
+        from src.models import PostTemplate
+        from src.database import get_db
+        
+        with get_db() as db:
+            template = db.query(PostTemplate).filter(PostTemplate.id == template_id).first()
+            
+            if not template:
+                return RedirectResponse(url="/templates", status_code=302)
+            
+            return templates.TemplateResponse(
+                "create_variant.html", 
+                {
+                    "request": request, 
+                    "template_id": template_id,
+                    "variant": None, 
+                    "is_edit": False
+                }
+            )
+    except Exception as e:
+        logger.error(f"Error loading create variant page: {str(e)}", exc_info=True)
+        return RedirectResponse(url="/templates", status_code=302)
+
+
+async def edit_variant_page(request: Request, variant_id: int):
+    """Variant editing page."""
+    try:
+        from src.models import PostVariant
+        from src.database import get_db
+        
+        with get_db() as db:
+            variant = db.query(PostVariant).filter(PostVariant.id == variant_id).first()
+            
+            if not variant:
+                return RedirectResponse(url=f"/template/{variant.template_id if variant else 1}", status_code=302)
+            
+            return templates.TemplateResponse(
+                "create_variant.html", 
+                {
+                    "request": request, 
+                    "template_id": variant.template_id,
+                    "variant": variant, 
+                    "is_edit": True
+                }
+            )
+    except Exception as e:
+        logger.error(f"Error loading edit variant page: {str(e)}", exc_info=True)
+        return RedirectResponse(url="/templates", status_code=302)
+
+
+async def manage_schedule_page(request: Request, schedule_id: int):
+    """Schedule management page for updating template and selection policy."""
+    try:
+        from src.models import Schedule, PostTemplate
+        from src.database import get_db
+        
+        with get_db() as db:
+            schedule = db.query(Schedule).filter(Schedule.id == schedule_id).first()
+            
+            if not schedule:
+                return RedirectResponse(url="/", status_code=302)
+            
+            # Get all active templates for dropdown
+            templates = db.query(PostTemplate).filter(PostTemplate.active == True).order_by(PostTemplate.name.asc()).all()
+            
+            from src.utils.timezone_utils import get_default_timezone
+            default_timezone = get_default_timezone()
+            
+            return templates.TemplateResponse(
+                "manage_schedule.html",
+                {
+                    "request": request,
+                    "schedule": schedule,
+                    "templates": templates,
+                    "default_timezone": default_timezone
+                }
+            )
+    except Exception as e:
+        logger.error(f"Error loading manage schedule page: {str(e)}", exc_info=True)
+        return RedirectResponse(url="/", status_code=302)
+

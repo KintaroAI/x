@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+
+{% block title %}{{ template.name }} - X Scheduler{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto">
+    <div class="flex justify-between items-center mb-8">
+        <div>
+            <h1 class="text-3xl font-bold text-gray-900">{{ template.name }}</h1>
+            {% if template.description %}
+            <p class="text-gray-600 mt-2">{{ template.description }}</p>
+            {% endif %}
+        </div>
+        <div class="flex gap-4">
+            <a href="/template/{{ template.id }}/edit" class="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors font-semibold">
+                Edit Template
+            </a>
+            <a href="/templates" class="bg-gray-200 text-gray-700 px-6 py-3 rounded-lg hover:bg-gray-300 transition-colors font-semibold">
+                Back to Templates
+            </a>
+        </div>
+    </div>
+    
+    <!-- Template Info -->
+    <div class="bg-white rounded-lg shadow-lg p-8 mb-8">
+        <h2 class="text-2xl font-semibold text-gray-800 mb-4">Template Information</h2>
+        <div class="grid md:grid-cols-2 gap-6">
+            <div>
+                <label class="text-sm font-medium text-gray-500">Status</label>
+                <p class="text-lg font-semibold {% if template.active %}text-green-600{% else %}text-gray-500{% endif %}">
+                    {% if template.active %}Active{% else %}Inactive{% endif %}
+                </p>
+            </div>
+            <div>
+                <label class="text-sm font-medium text-gray-500">Created</label>
+                <p class="text-lg">{{ template.created_at|datetime_tz }}</p>
+            </div>
+            {% if template.created_by %}
+            <div>
+                <label class="text-sm font-medium text-gray-500">Created By</label>
+                <p class="text-lg">{{ template.created_by }}</p>
+            </div>
+            {% endif %}
+            <div>
+                <label class="text-sm font-medium text-gray-500">Variants</label>
+                <p class="text-lg font-semibold">{{ variants|length }} variant{{ 's' if variants|length != 1 else '' }}</p>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Variants Section -->
+    <div class="bg-white rounded-lg shadow-lg p-8 mb-8">
+        <div class="flex justify-between items-center mb-6">
+            <h2 class="text-2xl font-semibold text-gray-800">Variants</h2>
+            <a href="/template/{{ template.id }}/add-variant" class="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition-colors font-semibold text-sm">
+                + Add Variant
+            </a>
+        </div>
+        
+        {% if variants %}
+        <div class="space-y-4">
+            {% for variant in variants %}
+            <div class="border border-gray-200 rounded-lg p-6 hover:shadow-md transition-shadow {% if not variant.active %}opacity-60{% endif %}">
+                <div class="flex justify-between items-start">
+                    <div class="flex-1">
+                        <div class="flex items-center gap-3 mb-3">
+                            <span class="px-3 py-1 bg-gray-100 text-gray-800 text-sm font-semibold rounded">Weight: {{ variant.weight }}</span>
+                            {% if variant.active %}
+                            <span class="px-3 py-1 bg-green-100 text-green-800 text-sm font-semibold rounded">Active</span>
+                            {% else %}
+                            <span class="px-3 py-1 bg-gray-100 text-gray-800 text-sm font-semibold rounded">Inactive</span>
+                            {% endif %}
+                        </div>
+                        <p class="text-gray-900 mb-3 text-lg">{{ variant.text }}</p>
+                        <div class="flex items-center gap-4 text-sm text-gray-500">
+                            <span>{{ variant.text|length }}/280 characters</span>
+                            <span>Created: {{ variant.created_at|datetime_tz }}</span>
+                            {% if variant.created_by %}
+                            <span>By: {{ variant.created_by }}</span>
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="flex gap-2">
+                        <a href="/variant/{{ variant.id }}/edit" class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors text-sm font-semibold">
+                            Edit
+                        </a>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="text-center py-12 border-2 border-dashed border-gray-300 rounded-lg">
+            <p class="text-gray-600 mb-4">No variants yet.</p>
+            <a href="/template/{{ template.id }}/add-variant" class="text-blue-600 hover:text-blue-800 font-semibold">Add your first variant →</a>
+        </div>
+        {% endif %}
+    </div>
+    
+    <!-- Schedules Section -->
+    {% if schedules %}
+    <div class="bg-white rounded-lg shadow-lg p-8">
+        <h2 class="text-2xl font-semibold text-gray-800 mb-6">Schedules Using This Template</h2>
+        <div class="space-y-4">
+            {% for schedule in schedules %}
+            <div class="border border-gray-200 rounded-lg p-4">
+                <div class="flex justify-between items-center">
+                    <div>
+                        <p class="font-semibold text-gray-900">Schedule #{{ schedule.id }}</p>
+                        <p class="text-sm text-gray-600">
+                            Policy: {{ schedule.selection_policy }} | 
+                            Window: {{ schedule.no_repeat_window }} | 
+                            Scope: {{ schedule.no_repeat_scope }}
+                        </p>
+                        {% if schedule.next_run_at %}
+                        <p class="text-sm text-gray-500">Next run: {{ schedule.next_run_at|datetime_tz }}</p>
+                        {% endif %}
+                    </div>
+                    <div class="flex gap-2">
+                        <a href="/api/schedules/{{ schedule.id }}/preview" class="bg-purple-600 text-white px-3 py-1 rounded hover:bg-purple-700 transition-colors text-sm">
+                            Preview Selection
+                        </a>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
+
