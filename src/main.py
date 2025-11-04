@@ -391,6 +391,32 @@ async def update_schedule(
     )
 
 
+@app.post("/api/templates/{template_id}/schedules")
+async def create_schedule_from_template(
+    template_id: int,
+    schedule_type: str = Form(...),
+    cron_expression: str = Form(None),
+    one_shot_datetime: str = Form(None),
+    rrule_expression: str = Form(None),
+    timezone: str = Form(None),
+    selection_policy: str = Form("RANDOM_UNIFORM"),
+    no_repeat_window: int = Form(0),
+    no_repeat_scope: str = Form("template")
+):
+    """Create a new schedule from a template with variant selection configuration."""
+    return await templates.create_schedule_from_template(
+        template_id,
+        schedule_type,
+        cron_expression,
+        one_shot_datetime,
+        rrule_expression,
+        timezone,
+        selection_policy,
+        no_repeat_window,
+        no_repeat_scope
+    )
+
+
 def main():
     """Main function."""
     import uvicorn

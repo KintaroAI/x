@@ -97,13 +97,165 @@
         {% endif %}
     </div>
     
+    <!-- Create Schedule Section -->
+    <div class="bg-white rounded-lg shadow-lg p-8 mb-8">
+        <h2 class="text-2xl font-semibold text-gray-800 mb-6">Create Schedule</h2>
+        <button 
+            onclick="toggleScheduleForm()"
+            class="bg-green-600 text-white px-6 py-3 rounded-lg hover:bg-green-700 transition-colors font-semibold mb-4">
+            + Create Schedule from Template
+        </button>
+        
+        <div id="schedule-form-container" class="hidden">
+            <form id="create-schedule-form" hx-post="/api/templates/{{ template.id }}/schedules" hx-target="#schedule-result" hx-swap="innerHTML" class="p-4 border border-gray-200 rounded-lg bg-gray-50">
+                <div class="mb-4">
+                    <label for="schedule_type" class="block text-sm font-medium text-gray-700 mb-2">
+                        Schedule Type *
+                    </label>
+                    <select 
+                        id="schedule_type" 
+                        name="schedule_type"
+                        required
+                        class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                        <option value="one_shot">One-Time (Specific Date/Time)</option>
+                        <option value="cron">Recurring (Cron Expression)</option>
+                        <option value="rrule">Recurring (RRULE/iCal)</option>
+                    </select>
+                </div>
+                
+                <!-- One-Shot Schedule Fields -->
+                <div id="one_shot_fields" class="mb-4">
+                    <label for="one_shot_datetime" class="block text-sm font-medium text-gray-700 mb-2">
+                        Date & Time (<span id="one_shot_timezone_label">{{ default_timezone|default('UTC') }}</span>)
+                    </label>
+                    <input 
+                        type="datetime-local" 
+                        id="one_shot_datetime" 
+                        name="one_shot_datetime"
+                        class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                </div>
+                
+                <!-- Cron Schedule Fields -->
+                <div id="cron_fields" class="mb-4 hidden">
+                    <label for="cron_expression" class="block text-sm font-medium text-gray-700 mb-2">
+                        Cron Expression
+                    </label>
+                    <input 
+                        type="text" 
+                        id="cron_expression" 
+                        name="cron_expression"
+                        placeholder="0 9 * * *"
+                        class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono text-sm">
+                    <p class="mt-2 text-sm text-gray-500">Format: minute hour day month day-of-week</p>
+                </div>
+                
+                <!-- RRULE Schedule Fields -->
+                <div id="rrule_fields" class="mb-4 hidden">
+                    <label for="rrule_expression" class="block text-sm font-medium text-gray-700 mb-2">
+                        RRULE Expression
+                    </label>
+                    <input 
+                        type="text" 
+                        id="rrule_expression" 
+                        name="rrule_expression"
+                        placeholder="FREQ=DAILY;INTERVAL=1"
+                        class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono text-sm">
+                </div>
+                
+                <!-- Timezone Field (for cron and rrule) -->
+                <div id="timezone_fields" class="mb-4 hidden">
+                    <label for="timezone" class="block text-sm font-medium text-gray-700 mb-2">
+                        Timezone
+                    </label>
+                    <select 
+                        id="timezone" 
+                        name="timezone"
+                        class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                        <option value="UTC">UTC</option>
+                        <option value="America/New_York">Eastern Time (ET)</option>
+                        <option value="America/Chicago">Central Time (CT)</option>
+                        <option value="America/Los_Angeles">Pacific Time (PT)</option>
+                        <option value="Europe/London">London (GMT)</option>
+                    </select>
+                </div>
+                
+                <!-- Selection Policy -->
+                <div class="mb-4">
+                    <label for="selection_policy" class="block text-sm font-medium text-gray-700 mb-2">
+                        Selection Policy
+                    </label>
+                    <select 
+                        id="selection_policy" 
+                        name="selection_policy"
+                        class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                        <option value="RANDOM_UNIFORM">Random Uniform</option>
+                        <option value="RANDOM_WEIGHTED">Random Weighted</option>
+                        <option value="ROUND_ROBIN">Round Robin</option>
+                        <option value="NO_REPEAT_WINDOW">No Repeat Window</option>
+                    </select>
+                </div>
+                
+                <!-- No Repeat Window -->
+                <div class="mb-4">
+                    <label for="no_repeat_window" class="block text-sm font-medium text-gray-700 mb-2">
+                        No Repeat Window
+                    </label>
+                    <input 
+                        type="number" 
+                        id="no_repeat_window" 
+                        name="no_repeat_window"
+                        min="0"
+                        value="0"
+                        class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                    <p class="mt-2 text-sm text-gray-500">Number of recent fires to exclude (0 = disabled)</p>
+                </div>
+                
+                <!-- No Repeat Scope -->
+                <div class="mb-4">
+                    <label for="no_repeat_scope" class="block text-sm font-medium text-gray-700 mb-2">
+                        No Repeat Scope
+                    </label>
+                    <select 
+                        id="no_repeat_scope" 
+                        name="no_repeat_scope"
+                        class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                        <option value="template">Template (across all schedules)</option>
+                        <option value="schedule">Schedule (this schedule only)</option>
+                    </select>
+                </div>
+                
+                <div id="schedule-result" class="mb-4"></div>
+                
+                <div class="flex gap-4">
+                    <button 
+                        type="submit" 
+                        class="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors font-semibold">
+                        Create Schedule
+                    </button>
+                    <button 
+                        type="button"
+                        onclick="toggleScheduleForm()"
+                        class="bg-gray-200 text-gray-700 px-6 py-3 rounded-lg hover:bg-gray-300 transition-colors font-semibold">
+                        Cancel
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
     <!-- Schedules Section -->
-    {% if schedules %}
     <div class="bg-white rounded-lg shadow-lg p-8">
-        <h2 class="text-2xl font-semibold text-gray-800 mb-6">Schedules Using This Template</h2>
+        <div class="flex justify-between items-center mb-6">
+            <h2 class="text-2xl font-semibold text-gray-800">Schedules Using This Template</h2>
+            {% if not schedules %}
+            <p class="text-sm text-gray-500">No schedules yet</p>
+            {% endif %}
+        </div>
+        
+        {% if schedules %}
         <div class="space-y-4">
             {% for schedule in schedules %}
-            <div class="border border-gray-200 rounded-lg p-4">
+            <div class="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
                 <div class="flex justify-between items-center">
                     <div>
                         <p class="font-semibold text-gray-900">Schedule #{{ schedule.id }}</p>
@@ -117,6 +269,9 @@
                         {% endif %}
                     </div>
                     <div class="flex gap-2">
+                        <a href="/schedule/{{ schedule.id }}/manage" class="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700 transition-colors text-sm">
+                            Manage
+                        </a>
                         <a href="/api/schedules/{{ schedule.id }}/preview" class="bg-purple-600 text-white px-3 py-1 rounded hover:bg-purple-700 transition-colors text-sm">
                             Preview Selection
                         </a>
@@ -125,8 +280,62 @@
             </div>
             {% endfor %}
         </div>
+        {% else %}
+        <div class="text-center py-12 border-2 border-dashed border-gray-300 rounded-lg">
+            <p class="text-gray-600 mb-4">No schedules created yet.</p>
+            <p class="text-sm text-gray-500">Click "Create Schedule from Template" above to get started.</p>
+        </div>
+        {% endif %}
     </div>
-    {% endif %}
+    
+    <script>
+        function toggleScheduleForm() {
+            const container = document.getElementById('schedule-form-container');
+            container.classList.toggle('hidden');
+        }
+        
+        // Schedule type toggle
+        document.addEventListener('DOMContentLoaded', function() {
+            const scheduleType = document.getElementById('schedule_type');
+            const oneShotFields = document.getElementById('one_shot_fields');
+            const cronFields = document.getElementById('cron_fields');
+            const rruleFields = document.getElementById('rrule_fields');
+            const timezoneFields = document.getElementById('timezone_fields');
+            
+            function updateScheduleFields() {
+                const type = scheduleType.value;
+                
+                oneShotFields.classList.add('hidden');
+                cronFields.classList.add('hidden');
+                rruleFields.classList.add('hidden');
+                timezoneFields.classList.add('hidden');
+                
+                if (type === 'one_shot') {
+                    oneShotFields.classList.remove('hidden');
+                } else if (type === 'cron') {
+                    cronFields.classList.remove('hidden');
+                    timezoneFields.classList.remove('hidden');
+                } else if (type === 'rrule') {
+                    rruleFields.classList.remove('hidden');
+                    timezoneFields.classList.remove('hidden');
+                }
+            }
+            
+            scheduleType.addEventListener('change', updateScheduleFields);
+            
+            // Reload page after successful schedule creation
+            document.getElementById('create-schedule-form').addEventListener('htmx:afterSwap', function(event) {
+                if (event.detail.target.id === 'schedule-result') {
+                    const result = event.detail.target.innerHTML;
+                    if (result.includes('success') || result.includes('created')) {
+                        setTimeout(() => {
+                            window.location.reload();
+                        }, 1500);
+                    }
+                }
+            });
+        });
+    </script>
 </div>
 {% endblock %}
 

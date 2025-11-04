@@ -929,3 +929,175 @@ async def update_schedule(
             content={"error": str(e)}
         )
 
+
+# ============================================================================
+# Create Schedule from Template Endpoint
+# ============================================================================
+
+async def create_schedule_from_template(
+    template_id: int,
+    schedule_type: str = Form(...),
+    cron_expression: str = Form(None),
+    one_shot_datetime: str = Form(None),
+    rrule_expression: str = Form(None),
+    timezone: str = Form(None),
+    selection_policy: str = Form("RANDOM_UNIFORM"),
+    no_repeat_window: int = Form(0),
+    no_repeat_scope: str = Form("template")
+):
+    """Create a new schedule from a template with variant selection configuration."""
+    try:
+        logger.debug(f"create_schedule_from_template called with template_id: {template_id}, schedule_type: {schedule_type}")
+        
+        from src.services.scheduler_service import ScheduleResolver
+        from src.utils.timezone_utils import get_default_timezone
+        import pytz
+        
+        # Validate schedule type
+        if schedule_type not in ["one_shot", "cron", "rrule"]:
+            return JSONResponse(
+                status_code=400,
+                content={"error": f"Invalid schedule_type: {schedule_type}. Must be one of: one_shot, cron, rrule"}
+            )
+        
+        # Validate selection policy
+        valid_policies = ["RANDOM_UNIFORM", "RANDOM_WEIGHTED", "ROUND_ROBIN", "NO_REPEAT_WINDOW"]
+        if selection_policy not in valid_policies:
+            return JSONResponse(
+                status_code=400,
+                content={"error": f"Invalid selection_policy. Must be one of: {', '.join(valid_policies)}"}
+            )
+        
+        # Validate no_repeat_scope
+        if no_repeat_scope not in ["template", "schedule"]:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Invalid no_repeat_scope. Must be 'template' or 'schedule'"}
+            )
+        
+        # Validate no_repeat_window
+        if no_repeat_window < 0:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "no_repeat_window must be >= 0"}
+            )
+        
+        resolver = ScheduleResolver()
+        
+        # Prepare schedule data
+        if schedule_type == "one_shot":
+            if not one_shot_datetime:
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": "one_shot_datetime is required for one_shot schedule"}
+                )
+            
+            try:
+                default_tz = get_default_timezone()
+                dt_naive = datetime.fromisoformat(one_shot_datetime)
+                if dt_naive.tzinfo is not None:
+                    dt_naive = dt_naive.replace(tzinfo=None)
+                
+                tz = pytz.timezone(default_tz)
+                dt_local = tz.localize(dt_naive)
+                dt_utc = dt_local.astimezone(pytz.UTC).replace(tzinfo=None)
+                schedule_spec = dt_utc.isoformat()
+                schedule_timezone = default_tz
+            except ValueError as e:
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": f"Invalid datetime format: {e}. Expected format: YYYY-MM-DDTHH:MM"}
+                )
+        
+        elif schedule_type == "cron":
+            if not cron_expression:
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": "cron_expression is required for cron schedule"}
+                )
+            schedule_spec = cron_expression.strip()
+            schedule_timezone = timezone or get_default_timezone()
+        
+        elif schedule_type == "rrule":
+            if not rrule_expression:
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": "rrule_expression is required for rrule schedule"}
+                )
+            schedule_spec = rrule_expression.strip()
+            schedule_timezone = timezone or get_default_timezone()
+        
+        with get_db() as db:
+            # Verify template exists
+            template = db.query(PostTemplate).filter(PostTemplate.id == template_id).first()
+            if not template:
+                return JSONResponse(
+                    status_code=404,
+                    content={"error": "Template not found"}
+                )
+            
+            # Create new schedule with template_id
+            new_schedule = Schedule(
+                template_id=template_id,
+                kind=schedule_type,
+                schedule_spec=schedule_spec,
+                timezone=schedule_timezone,
+                selection_policy=selection_policy,
+                no_repeat_window=no_repeat_window,
+                no_repeat_scope=no_repeat_scope,
+                enabled=True,
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow()
+            )
+            
+            # Calculate next_run_at
+            next_run_at = resolver.resolve_schedule(new_schedule)
+            
+            if next_run_at:
+                new_schedule.next_run_at = next_run_at
+                logger.info(f"Created schedule from template {template_id}, next_run_at: {next_run_at}")
+            else:
+                new_schedule.enabled = False
+                logger.warning(f"Could not resolve schedule for template {template_id}, created disabled")
+            
+            db.add(new_schedule)
+            db.commit()
+            db.refresh(new_schedule)
+            
+            logger.info(f"Created new schedule {new_schedule.id} from template {template_id}")
+            log_info(
+                action="schedule_created_from_template",
+                message=f"Created schedule {new_schedule.id} from template {template_id}",
+                component="api",
+                extra_data=json.dumps({
+                    "schedule_id": new_schedule.id,
+                    "template_id": template_id,
+                    "schedule_type": schedule_type,
+                    "selection_policy": selection_policy
+                })
+            )
+            
+            return {
+                "id": new_schedule.id,
+                "template_id": new_schedule.template_id,
+                "kind": new_schedule.kind,
+                "selection_policy": new_schedule.selection_policy,
+                "no_repeat_window": new_schedule.no_repeat_window,
+                "no_repeat_scope": new_schedule.no_repeat_scope,
+                "next_run_at": new_schedule.next_run_at.isoformat() if new_schedule.next_run_at else None,
+                "enabled": new_schedule.enabled,
+                "message": "Schedule created successfully"
+            }
+    
+    except Exception as e:
+        logger.error(f"Unexpected error in create_schedule_from_template: {str(e)}", exc_info=True)
+        log_error(
+            action="schedule_create_from_template_exception",
+            message=f"Exception while creating schedule from template",
+            component="api",
+            extra_data=json.dumps({"template_id": template_id, "error": str(e), "error_type": type(e).__name__})
+        )
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e)}
+        )

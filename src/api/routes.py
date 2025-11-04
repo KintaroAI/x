@@ -398,13 +398,17 @@ async def view_template_page(request: Request, template_id: int):
                 Schedule.template_id == template_id
             ).all()
             
+            from src.utils.timezone_utils import get_default_timezone
+            default_timezone = get_default_timezone()
+            
             return templates.TemplateResponse(
                 "view_template.html",
                 {
                     "request": request,
                     "template": template,
                     "variants": variants,
-                    "schedules": schedules
+                    "schedules": schedules,
+                    "default_timezone": default_timezone
                 }
             )
     except Exception as e:
