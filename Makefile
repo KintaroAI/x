@@ -1,4 +1,4 @@
-.PHONY: help dev prod up down logs logs-api clean migrate init-db migrate-create migrate-create-simple shell-db update-db build build-api build-worker test test-rrule test-scheduler test-calendar test-calendar-unit test-calendar-integration test-calendar-service coverage shell-api shell-worker
+.PHONY: help dev prod up down logs logs-api clean migrate init-db migrate-create migrate-create-simple shell-db update-db build build-api build-worker test test-rrule test-scheduler test-calendar test-calendar-unit test-calendar-integration test-calendar-service test-variant test-variant-unit test-variant-integration coverage shell-api shell-worker
 
 help:
 	@echo "Available commands:"
@@ -28,6 +28,9 @@ help:
 	@echo "  make test-calendar-unit - Run calendar unit tests"
 	@echo "  make test-calendar-integration - Run calendar integration tests"
 	@echo "  make test-calendar-service - Run calendar service tests only"
+	@echo "  make test-variant    - Run all variant selection tests"
+	@echo "  make test-variant-unit - Run variant selection unit tests"
+	@echo "  make test-variant-integration - Run variant selection integration tests"
 	@echo "  make coverage        - Run tests with coverage report"
 
 dev:
@@ -137,6 +140,18 @@ test-calendar-integration:
 test-calendar-service:
 	@echo "Running calendar service tests..."
 	docker compose exec api pytest tests/test_calendar_service.py -v
+
+test-variant:
+	@echo "Running all variant selection tests..."
+	docker compose exec api pytest tests/test_variant_service.py tests/test_scheduler_variants.py tests/test_publish_variants.py tests/test_no_repeat_window.py -v
+
+test-variant-unit:
+	@echo "Running variant selection unit tests..."
+	docker compose exec api pytest tests/test_variant_service.py -v -m "unit"
+
+test-variant-integration:
+	@echo "Running variant selection integration tests..."
+	docker compose exec api pytest tests/test_scheduler_variants.py tests/test_publish_variants.py tests/test_no_repeat_window.py -v -m "integration"
 
 coverage:
 	@echo "Running tests with coverage..."

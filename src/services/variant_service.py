@@ -102,7 +102,13 @@ class VariantSelector:
         planned_at_normalized = planned_at_utc.replace(microsecond=0)
         seed_str = f"{schedule_id}:{planned_at_normalized.isoformat()}"
         seed_bytes = hashlib.sha256(seed_str.encode()).digest()
-        return int.from_bytes(seed_bytes[:8], "big")  # Use first 8 bytes for int64
+        # Use first 8 bytes for int64, but ensure it fits in PostgreSQL BIGINT range
+        # PostgreSQL BIGINT: -9223372036854775808 to 9223372036854775807
+        # Use unsigned int64 and take modulo to fit in signed range
+        seed_int = int.from_bytes(seed_bytes[:8], "big")
+        # Convert to signed 64-bit range (0 to 2^63-1)
+        max_bigint = 2**63 - 1
+        return seed_int % (max_bigint + 1)
     
     def _apply_no_repeat_window(
         self,
