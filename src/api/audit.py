@@ -49,7 +49,8 @@ async def get_audit_log_html():
         
         if not records:
             return HTMLResponse(
-                "<p class='text-gray-600 p-4 text-center'>No audit log records found.</p>"
+                "<p class='text-gray-600 p-4 text-center'>No audit log records found.</p>",
+                status_code=200
             )
         
         html_rows = ""
@@ -87,7 +88,7 @@ async def get_audit_log_html():
         </div>
         """
         
-        return HTMLResponse(html)
+        return HTMLResponse(html, status_code=200)
 
 
 async def create_test_audit_log():

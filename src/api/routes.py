@@ -165,7 +165,7 @@ async def hello():
 
 async def health_html():
     """Health check endpoint for HTMX."""
-    return HTMLResponse("<p class='text-green-600 font-semibold'>✓ Server is healthy</p>")
+    return HTMLResponse("<p class='text-green-600 font-semibold'>✓ Server is healthy</p>", status_code=200)
 
 
 async def calendar_page(request: Request):

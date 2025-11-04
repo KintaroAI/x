@@ -315,7 +315,8 @@ async def create_post(
                     <p class="text-sm">Created at: {post.created_at.strftime('%Y-%m-%d %H:%M:%S')}</p>
                     {schedule_info}
                 </div>
-                """
+                """,
+                status_code=200
             )
     
     except Exception as e:
@@ -332,7 +333,8 @@ async def create_post(
                 <h3 class="font-semibold mb-2">✗ Error Creating Post</h3>
                 <p class="text-sm">{str(e)}</p>
             </div>
-            """
+            """,
+            status_code=500
         )
 
 
@@ -364,7 +366,8 @@ async def update_post(
                     <h3 class="font-semibold mb-2">✗ Error Updating Post</h3>
                     <p class="text-sm">Post text cannot be empty</p>
                 </div>
-                """
+                """,
+                status_code=400
             )
         
         # Parse media_refs if provided
@@ -387,7 +390,8 @@ async def update_post(
                         <h3 class="font-semibold mb-2">✗ Error Updating Post</h3>
                         <p class="text-sm">media_refs must be a valid JSON array</p>
                     </div>
-                    """
+                    """,
+                    status_code=400
                 )
         
         with get_db() as db:
@@ -406,7 +410,8 @@ async def update_post(
                         <h3 class="font-semibold mb-2">✗ Error Updating Post</h3>
                         <p class="text-sm">Post not found</p>
                     </div>
-                    """
+                    """,
+                    status_code=404
                 )
             
             # Update post
@@ -466,7 +471,8 @@ async def update_post(
                     <p class="text-sm">Updated at: {post.updated_at.strftime('%Y-%m-%d %H:%M:%S')}</p>
                     {schedule_info}
                 </div>
-                """
+                """,
+                status_code=200
             )
     
     except Exception as e:
@@ -483,7 +489,8 @@ async def update_post(
                 <h3 class="font-semibold mb-2">✗ Error Updating Post</h3>
                 <p class="text-sm">{str(e)}</p>
             </div>
-            """
+            """,
+            status_code=500
         )
 
 
